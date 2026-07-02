@@ -96,13 +96,26 @@ def process_albaran(self, payload: dict):
         db_result = {"applied": [], "skipped": []}
         if business_id:
             import asyncio
+            from sqlalchemy import select
+            from app.models.user import User
+
             async def _apply():
                 async with get_db_session() as db:
+                    user_result = await db.execute(
+                        select(User).where(
+                            User.business_id == business_id,
+                            User.whatsapp_number == sender_phone,
+                        )
+                    )
+                    user = user_result.scalar_one_or_none()
+                    if user is None:
+                        return {"applied": [], "skipped": [], "error": "user_not_found"}
+
                     service = InventoryService(db)
                     return await service.apply_albaran(
                         business_id=business_id,
                         result=result,
-                        created_by=sender_phone,
+                        created_by=user.id,
                     )
             db_result = asyncio.run(_apply())
 
