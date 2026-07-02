@@ -1,3 +1,4 @@
+import json
 import httpx
 from celery import Celery
 
@@ -7,11 +8,10 @@ from app.infrastructure.storage.sqs_client import sqs_client
 from app.infrastructure.ocr.textract_client import textract_client
 from app.infrastructure.llm.anthropic_client import anthropic_client
 from app.infrastructure.messaging.twilio_client import twilio_client
+from app.schemas.albaran import AlbaranExtraction, AlbaranProcessingResult
 
-# Instancia de Celery con SQS como broker.
-# La URL del broker sigue el formato que celery[sqs] espera.
 celery_app = Celery("albaran_worker")
-celery_app.conf.broker_url = f"sqs://{ settings.aws_access_key_id}:{settings.aws_secret_access_key}@"
+celery_app.conf.broker_url = f"sqs://{settings.aws_access_key_id}:{settings.aws_secret_access_key}@"
 celery_app.conf.broker_transport_options = {
     "region": settings.aws_region,
     "predefined_queues": {
@@ -41,6 +41,8 @@ Debes devolver un JSON con esta estructura exacta, sin texto adicional:
 }
 """
 
+CONFIDENCE_THRESHOLD = 0.85
+
 
 @celery_app.task(bind=True, max_retries=3)
 def process_albaran(self, payload: dict):
@@ -49,8 +51,7 @@ def process_albaran(self, payload: dict):
     content_type = payload.get("content_type", "image/jpeg")
 
     try:
-        # Paso 1 — descargar la imagen desde la URL de Twilio.
-        # Twilio requiere autenticación básica para acceder a los media.
+        # Paso 1 — descargar imagen de Twilio
         with httpx.Client() as client:
             response = client.get(
                 media_url,
@@ -58,34 +59,49 @@ def process_albaran(self, payload: dict):
             )
             image_bytes = response.content
 
-        # Paso 2 — subir la imagen original a S3 antes de procesarla.
-        # Así nunca perdemos la foto aunque el procesamiento falle.
+        # Paso 2 — subir a S3
         s3_key = s3_client.upload_file(
             file_bytes=image_bytes,
             prefix="albaranes",
             content_type=content_type,
         )
 
-        # Paso 3 — pasar la imagen por Textract para extraer texto y tablas.
-        # Textract devuelve texto estructurado — más barato y preciso que
-        # mandar la imagen cruda a Claude.
+        # Paso 3 — Textract
         textract_output = textract_client.extract_text_and_tables(image_bytes)
 
-        # Paso 4 — llamar a Claude con el output de Textract.
-        # Claude extrae los datos estructurados del albarán.
+        # Paso 4 — Claude extrae el JSON estructurado
         llm_response = anthropic_client.extract_albaran(
             textract_output=textract_output,
             system_prompt=SYSTEM_PROMPT_ALBARAN,
         )
 
-        # Paso 5 — confirmar al dueño por WhatsApp qué se ha procesado.
-        # Mensaje simple con el texto que Claude devolvió.
-        twilio_client.send_text(
-            to_number=sender_phone,
-            body=f"✅ Albarán procesado:\n\n{llm_response['content']}",
+        # Paso 5 — parsear y validar con Pydantic.
+        # Limpiamos posibles backticks que Claude añade a veces.
+        raw_content = llm_response["content"].strip().removeprefix("```json").removesuffix("```").strip()
+        extraction = AlbaranExtraction.model_validate_json(raw_content)
+
+        # Paso 6 — separar líneas por confidence_score.
+        # Las líneas con score >= 0.85 se confirman automáticamente.
+        # Las demás van a revisión humana.
+        auto = [l for l in extraction.lines if l.confidence_score >= CONFIDENCE_THRESHOLD]
+        pending = [l for l in extraction.lines if l.confidence_score < CONFIDENCE_THRESHOLD]
+
+        result = AlbaranProcessingResult(
+            s3_key=s3_key,
+            extraction=extraction,
+            lines_auto_confirmed=auto,
+            lines_pending_review=pending,
         )
 
+        # Paso 7 — responder al dueño con el resumen
+        resumen = f"✅ Albarán procesado\n"
+        resumen += f"Proveedor: {extraction.supplier_name or 'No detectado'}\n"
+        resumen += f"Líneas registradas: {len(auto)}\n"
+        if pending:
+            resumen += f"⚠️ Líneas pendientes de revisión: {len(pending)}"
+
+        twilio_client.send_text(to_number=sender_phone, body=resumen)
+        return result.model_dump()
+
     except Exception as exc:
-        # Si algo falla, reintentamos con backoff exponencial: 1s, 2s, 4s.
-        # Después de 3 intentos el job va a la DLQ automáticamente.
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
