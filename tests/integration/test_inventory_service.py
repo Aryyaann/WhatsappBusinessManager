@@ -9,12 +9,12 @@ from app.schemas.albaran import AlbaranExtraction, AlbaranLine, AlbaranProcessin
 from app.models.business import Business
 from app.models.product import Product
 from app.models.stock import StockLevel, StockMovement
+from app.models.user import User
 from sqlalchemy import select
 
 
 @pytest.fixture
 def sample_result():
-    # Resultado de procesamiento con una línea auto-confirmada.
     line = AlbaranLine(
         product_name="Tinte Rubio 100ml",
         quantity=Decimal("10"),
@@ -36,7 +36,6 @@ def sample_result():
 @pytest.mark.asyncio
 async def test_apply_albaran_creates_stock_movement(sample_result):
     async with get_db_session() as db:
-        # Crear negocio de prueba
         business = Business(
             id=str(uuid4()),
             name="Peluquería Test",
@@ -47,7 +46,16 @@ async def test_apply_albaran_creates_stock_movement(sample_result):
         db.add(business)
         await db.flush()
 
-        # Crear producto de prueba
+        user = User(
+            id=str(uuid4()),
+            business_id=business.id,
+            whatsapp_number="+34600000001",
+            name="Dueño Test",
+            role="owner",
+        )
+        db.add(user)
+        await db.flush()
+
         product = Product(
             id=str(uuid4()),
             business_id=business.id,
@@ -62,19 +70,16 @@ async def test_apply_albaran_creates_stock_movement(sample_result):
         db.add(product)
         await db.flush()
 
-        # Aplicar albarán
         service = InventoryService(db)
         result = await service.apply_albaran(
             business_id=business.id,
             result=sample_result,
-            created_by="+34600000001",
+            created_by=user.id,
         )
 
-        # Verificar que se aplicó correctamente
         assert "Tinte Rubio 100ml" in result["applied"]
         assert result["skipped"] == []
 
-        # Verificar stock_levels
         stock_result = await db.execute(
             select(StockLevel).where(
                 StockLevel.business_id == business.id,
@@ -85,7 +90,6 @@ async def test_apply_albaran_creates_stock_movement(sample_result):
         assert stock is not None
         assert stock.quantity == Decimal("10")
 
-        # Verificar stock_movements
         movement_result = await db.execute(
             select(StockMovement).where(
                 StockMovement.business_id == business.id,
@@ -97,5 +101,4 @@ async def test_apply_albaran_creates_stock_movement(sample_result):
         assert movement.movement_type == "purchase"
         assert movement.quantity == Decimal("10")
 
-        # Rollback para no contaminar la base de datos de pruebas
         await db.rollback()
