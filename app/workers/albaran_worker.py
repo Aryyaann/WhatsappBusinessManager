@@ -3,12 +3,13 @@ import httpx
 from celery import Celery
 
 from app.core.config import settings
+from app.core.database import get_db_session
 from app.infrastructure.storage.s3_client import s3_client
-from app.infrastructure.storage.sqs_client import sqs_client
 from app.infrastructure.ocr.textract_client import textract_client
 from app.infrastructure.llm.anthropic_client import anthropic_client
 from app.infrastructure.messaging.twilio_client import twilio_client
 from app.schemas.albaran import AlbaranExtraction, AlbaranProcessingResult
+from app.domain.inventory.service import InventoryService
 
 celery_app = Celery("albaran_worker")
 celery_app.conf.broker_url = f"sqs://{settings.aws_access_key_id}:{settings.aws_secret_access_key}@"
@@ -49,6 +50,7 @@ def process_albaran(self, payload: dict):
     sender_phone = payload["sender_phone"]
     media_url = payload["media_url"]
     content_type = payload.get("content_type", "image/jpeg")
+    business_id = payload.get("business_id")
 
     try:
         # Paso 1 — descargar imagen de Twilio
@@ -75,14 +77,11 @@ def process_albaran(self, payload: dict):
             system_prompt=SYSTEM_PROMPT_ALBARAN,
         )
 
-        # Paso 5 — parsear y validar con Pydantic.
-        # Limpiamos posibles backticks que Claude añade a veces.
+        # Paso 5 — parsear y validar con Pydantic
         raw_content = llm_response["content"].strip().removeprefix("```json").removesuffix("```").strip()
         extraction = AlbaranExtraction.model_validate_json(raw_content)
 
-        # Paso 6 — separar líneas por confidence_score.
-        # Las líneas con score >= 0.85 se confirman automáticamente.
-        # Las demás van a revisión humana.
+        # Paso 6 — separar líneas por confidence_score
         auto = [l for l in extraction.lines if l.confidence_score >= CONFIDENCE_THRESHOLD]
         pending = [l for l in extraction.lines if l.confidence_score < CONFIDENCE_THRESHOLD]
 
@@ -93,10 +92,26 @@ def process_albaran(self, payload: dict):
             lines_pending_review=pending,
         )
 
-        # Paso 7 — responder al dueño con el resumen
+        # Paso 7 — actualizar stock en base de datos si tenemos business_id
+        db_result = {"applied": [], "skipped": []}
+        if business_id:
+            import asyncio
+            async def _apply():
+                async with get_db_session() as db:
+                    service = InventoryService(db)
+                    return await service.apply_albaran(
+                        business_id=business_id,
+                        result=result,
+                        created_by=sender_phone,
+                    )
+            db_result = asyncio.run(_apply())
+
+        # Paso 8 — responder al dueño con el resumen
         resumen = f"✅ Albarán procesado\n"
         resumen += f"Proveedor: {extraction.supplier_name or 'No detectado'}\n"
-        resumen += f"Líneas registradas: {len(auto)}\n"
+        resumen += f"Líneas registradas: {len(db_result['applied'])}\n"
+        if db_result["skipped"]:
+            resumen += f"⚠️ Productos no reconocidos: {', '.join(db_result['skipped'])}\n"
         if pending:
             resumen += f"⚠️ Líneas pendientes de revisión: {len(pending)}"
 
