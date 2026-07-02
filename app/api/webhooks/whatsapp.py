@@ -3,7 +3,7 @@ from typing import Optional
 from sqlalchemy import select
 
 from app.infrastructure.messaging.twilio_client import twilio_client
-from app.infrastructure.storage.sqs_client import sqs_client
+from app.workers.albaran_worker import process_albaran
 from app.core.database import get_db_session
 from app.models.business import Business
 
@@ -48,7 +48,7 @@ async def whatsapp_webhook(
             "body": Body,
             "business_id": business_id,
         }
-        message_id = sqs_client.send_message(payload)
-        return {"status": "queued", "message_id": message_id}
+        task = process_albaran.delay(payload)
+        return {"status": "queued", "task_id": task.id}
 
     return {"status": "received", "body": Body}
