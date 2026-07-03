@@ -54,7 +54,7 @@ def process_albaran(self, payload: dict):
 
     try:
         # Paso 1 — descargar imagen de Twilio
-        with httpx.Client() as client:
+        with httpx.Client(follow_redirects=True) as client:
             response = client.get(
                 media_url,
                 auth=(settings.twilio_account_sid, settings.twilio_auth_token),
