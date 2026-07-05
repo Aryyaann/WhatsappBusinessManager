@@ -41,6 +41,8 @@ async def test_apply_albaran_product_not_found_no_semantic_match(mock_embedding_
 
     assert outcome["applied"] == []
     assert "Producto Desconocido" in outcome["skipped"]
+    assert len(outcome["skipped_lines"]) == 1
+    assert outcome["skipped_lines"][0].product_name == "Producto Desconocido"
     mock_embedding_client.embed_text.assert_called_once_with("Producto Desconocido")
 
 

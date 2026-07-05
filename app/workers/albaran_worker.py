@@ -10,6 +10,7 @@ from app.infrastructure.llm.anthropic_client import anthropic_client
 from app.infrastructure.messaging.twilio_client import twilio_client
 from app.schemas.albaran import AlbaranExtraction, AlbaranProcessingResult
 from app.domain.inventory.service import InventoryService
+from app.domain.catalog.pending_confirmations import pending_confirmation_service
 
 celery_app = Celery("albaran_worker")
 celery_app.conf.broker_url = f"sqs://{settings.aws_access_key_id}:{settings.aws_secret_access_key}@"
@@ -93,7 +94,7 @@ def process_albaran(self, payload: dict):
         )
 
         # Paso 7 — actualizar stock en base de datos si tenemos business_id
-        db_result = {"applied": [], "skipped": []}
+        db_result = {"applied": [], "skipped": [], "skipped_lines": []}
         if business_id:
             import asyncio
             from sqlalchemy import select
@@ -109,22 +110,51 @@ def process_albaran(self, payload: dict):
                     )
                     user = user_result.scalar_one_or_none()
                     if user is None:
-                        return {"applied": [], "skipped": [], "error": "user_not_found"}
+                        return {"applied": [], "skipped": [], "skipped_lines": [], "error": "user_not_found"}
 
                     service = InventoryService(db)
-                    return await service.apply_albaran(
+                    result_dict = await service.apply_albaran(
                         business_id=business_id,
                         result=result,
                         created_by=user.id,
                     )
+                    result_dict["created_by"] = user.id
+                    return result_dict
             db_result = asyncio.run(_apply())
+
+        # Paso 7bis — encolar como confirmación pendiente cada producto no
+        # reconocido, para poder preguntarle al dueño si lo da de alta.
+        # Solo mandamos la pregunta de WhatsApp si la cola estaba vacía antes
+        # de este albarán — si ya había preguntas pendientes de un albarán
+        # anterior, no interrumpimos esa conversación con una pregunta nueva.
+        skipped_lines = db_result.get("skipped_lines", [])
+        if skipped_lines and business_id and db_result.get("created_by"):
+            had_pending_before = pending_confirmation_service.has_pending(sender_phone)
+            for line in skipped_lines:
+                pending_confirmation_service.enqueue(
+                    phone=sender_phone,
+                    business_id=business_id,
+                    created_by=db_result["created_by"],
+                    product_name=line.product_name,
+                    quantity=line.quantity,
+                    unit_cost=line.unit_cost,
+                    expiry_date=line.expiry_date,
+                    lot_number=line.lot_number,
+                )
+            if not had_pending_before:
+                next_item = pending_confirmation_service.peek_next(sender_phone)
+                if next_item:
+                    twilio_client.send_text(
+                        to_number=sender_phone,
+                        body=_build_confirmation_question(next_item),
+                    )
 
         # Paso 8 — responder al dueño con el resumen
         resumen = f"✅ Albarán procesado\n"
         resumen += f"Proveedor: {extraction.supplier_name or 'No detectado'}\n"
         resumen += f"Líneas registradas: {len(db_result['applied'])}\n"
         if db_result["skipped"]:
-            resumen += f"⚠️ Productos no reconocidos: {', '.join(db_result['skipped'])}\n"
+            resumen += f"⚠️ Productos no reconocidos (te preguntaré si añadirlos): {', '.join(db_result['skipped'])}\n"
         if pending:
             resumen += f"⚠️ Líneas pendientes de revisión: {len(pending)}"
 
@@ -133,3 +163,15 @@ def process_albaran(self, payload: dict):
 
     except Exception as exc:
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+
+
+def _build_confirmation_question(item: dict) -> str:
+    # Mensaje que se envía al dueño cuando hay un producto nuevo esperando
+    # confirmación. item viene de PendingConfirmationService (ver
+    # app/domain/catalog/pending_confirmations.py) — quantity/unit_cost son
+    # strings ahí porque se serializan a JSON en Redis.
+    return (
+        f"📦 Producto nuevo detectado: *{item['product_name']}*\n"
+        f"Cantidad: {item['quantity']} | Coste unidad: {item['unit_cost']}€\n\n"
+        f"¿Lo añado al catálogo? Responde *SI* para confirmar o *NO* para descartarlo."
+    )

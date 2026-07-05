@@ -33,13 +33,17 @@ class InventoryService:
         # Las pendientes de revisión no tocan stock hasta que el dueño confirme.
         applied = []
         skipped = []
+        skipped_lines = []
 
         for line in result.lines_auto_confirmed:
             product = await self._find_product(business_id, line.product_name)
             if product is None:
                 # Producto no reconocido — va a la lista de skipped.
-                # El dueño tendrá que añadirlo al catálogo manualmente.
+                # skipped_lines guarda la línea completa (cantidad, coste,
+                # caducidad, lote), no solo el nombre, porque el worker la
+                # necesita entera para encolarla como confirmación pendiente.
                 skipped.append(line.product_name)
+                skipped_lines.append(line)
                 continue
 
             await self._update_stock(business_id, product.id, line.quantity)
@@ -53,7 +57,7 @@ class InventoryService:
             applied.append(line.product_name)
 
         await self.db.commit()
-        return {"applied": applied, "skipped": skipped}
+        return {"applied": applied, "skipped": skipped, "skipped_lines": skipped_lines}
 
     async def _find_product(self, business_id: str, name: str):
         # 1. Match exacto primero: más rápido y sin ambigüedad cuando el
