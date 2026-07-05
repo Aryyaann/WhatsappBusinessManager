@@ -5,6 +5,14 @@ from sqlalchemy import select, update
 from app.models.stock import StockLevel, StockMovement
 from app.models.product import Product
 from app.schemas.albaran import AlbaranProcessingResult, AlbaranLine
+from app.infrastructure.embeddings.openai_client import embedding_client
+
+# Distancia coseno máxima para aceptar un match semántico como válido.
+# pgvector calcula cosine_distance = 1 - cosine_similarity, así que 0.15
+# equivale a exigir similitud >= 0.85. Umbral conservador a propósito:
+# mejor marcar como no reconocido de más que mezclar stock de productos
+# distintos. Se ajustará con datos reales cuando haya catálogos en producción.
+SEMANTIC_MATCH_THRESHOLD = 0.15
 
 
 class InventoryService:
@@ -48,8 +56,8 @@ class InventoryService:
         return {"applied": applied, "skipped": skipped}
 
     async def _find_product(self, business_id: str, name: str):
-        # Búsqueda exacta por nombre dentro del negocio.
-        # En Fase 2 añadiremos fuzzy match con pgvector.
+        # 1. Match exacto primero: más rápido y sin ambigüedad cuando el
+        # nombre del albarán coincide literal con el catálogo.
         result = await self.db.execute(
             select(Product).where(
                 Product.business_id == business_id,
@@ -57,7 +65,30 @@ class InventoryService:
                 Product.is_active == True,
             )
         )
-        return result.scalar_one_or_none()
+        product = result.scalar_one_or_none()
+        if product is not None:
+            return product
+
+        # 2. Sin match exacto, buscamos por similitud semántica contra los
+        # embeddings del catálogo (pgvector, distancia coseno). Cubre casos
+        # como "Tinte Rubio N7" en el albarán vs "Tinte Rubio Nº7 100ml" en
+        # el catálogo.
+        query_embedding = embedding_client.embed_text(name)
+        distance = Product.embedding.cosine_distance(query_embedding)
+        stmt = (
+            select(Product, distance.label("distance"))
+            .where(
+                Product.business_id == business_id,
+                Product.is_active == True,
+                Product.embedding.is_not(None),
+            )
+            .order_by(distance)
+            .limit(1)
+        )
+        row = (await self.db.execute(stmt)).first()
+        if row is None or row.distance > SEMANTIC_MATCH_THRESHOLD:
+            return None
+        return row.Product
 
     async def _update_stock(
         self, business_id: str, product_id: str, quantity: Decimal
