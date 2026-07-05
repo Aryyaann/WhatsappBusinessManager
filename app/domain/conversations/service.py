@@ -32,7 +32,6 @@ class ConversationService:
                 business_id=business_id,
                 participant_phone=participant_phone,
                 participant_type=participant_type,
-                started_at=datetime.now(timezone.utc),
                 last_message_at=datetime.now(timezone.utc),
                 message_count=0,
             )
