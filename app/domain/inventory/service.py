@@ -59,6 +59,29 @@ class InventoryService:
         await self.db.commit()
         return {"applied": applied, "skipped": skipped, "skipped_lines": skipped_lines}
 
+    async def apply_confirmed_new_product(
+        self,
+        business_id: str,
+        product_id: str,
+        quantity: Decimal,
+        unit_cost: Decimal,
+        created_by: str,
+    ) -> None:
+        # Se usa cuando el dueño confirma por WhatsApp un producto que antes
+        # no existía en el catálogo (ver PendingConfirmationService). El
+        # producto ya se ha creado en CatalogService; aquí solo aplicamos el
+        # movimiento de stock, igual que si hubiera hecho match desde el
+        # principio.
+        await self._update_stock(business_id, product_id, quantity)
+        await self._create_movement(
+            business_id=business_id,
+            product_id=product_id,
+            quantity=quantity,
+            unit_cost=unit_cost,
+            created_by=created_by,
+        )
+        await self.db.commit()
+
     async def _find_product(self, business_id: str, name: str):
         # 1. Match exacto primero: más rápido y sin ambigüedad cuando el
         # nombre del albarán coincide literal con el catálogo.

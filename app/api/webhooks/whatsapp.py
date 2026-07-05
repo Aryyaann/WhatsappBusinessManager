@@ -1,13 +1,99 @@
-from fastapi import APIRouter, Form, Header, HTTPException, Request
+from decimal import Decimal, InvalidOperation
 from typing import Optional
+
+from fastapi import APIRouter, Form, Header, HTTPException, Request
 from sqlalchemy import select
 
 from app.infrastructure.messaging.twilio_client import twilio_client
 from app.workers.albaran_worker import process_albaran
 from app.core.database import get_db_session
 from app.models.business import Business
+from app.domain.catalog.pending_confirmations import pending_confirmation_service
+from app.domain.catalog.service import CatalogService
+from app.domain.inventory.service import InventoryService
 
 router = APIRouter()
+
+# Palabras que interpretamos como confirmación o rechazo. En minúsculas y
+# sin acentos porque normalizamos el texto antes de comparar.
+CONFIRM_WORDS = {"si", "sí", "yes", "ok", "vale", "confirmo"}
+REJECT_WORDS = {"no", "cancelar", "descartar"}
+
+
+def _interpret_reply(body: str) -> Optional[bool]:
+    # True = confirma, False = rechaza, None = no se entiende la respuesta.
+    normalized = body.strip().lower()
+    if normalized in CONFIRM_WORDS:
+        return True
+    if normalized in REJECT_WORDS:
+        return False
+    return None
+
+
+async def _handle_pending_confirmation_reply(sender_phone: str, body: str) -> Optional[str]:
+    # Si el dueño tiene una pregunta pendiente sobre un producto nuevo,
+    # interpreta su respuesta. Devuelve el mensaje a enviar, o None si no
+    # había ninguna pregunta pendiente (el webhook sigue su flujo normal).
+    pending_item = pending_confirmation_service.peek_next(sender_phone)
+    if pending_item is None:
+        return None
+
+    decision = _interpret_reply(body)
+    if decision is None:
+        # Respuesta ambigua: no quitamos el item de la cola, solo repetimos
+        # la pregunta para no perder la confirmación pendiente.
+        return (
+            f"No te he entendido. Sobre *{pending_item['product_name']}*: "
+            f"responde *SI* para añadirlo al catálogo o *NO* para descartarlo."
+        )
+
+    # Ya tenemos una respuesta clara — sacamos el item de la cola.
+    item = pending_confirmation_service.pop_next(sender_phone)
+
+    if decision is False:
+        reply = f"❌ Descartado: *{item['product_name']}* no se ha añadido al catálogo."
+    else:
+        try:
+            quantity = Decimal(item["quantity"])
+            unit_cost = Decimal(item["unit_cost"])
+        except InvalidOperation:
+            reply = f"⚠️ No pude procesar los datos de *{item['product_name']}*. Añádelo manualmente desde el panel."
+        else:
+            async with get_db_session() as db:
+                catalog_service = CatalogService(db)
+                product = await catalog_service.create_product(
+                    business_id=item["business_id"],
+                    name=item["product_name"],
+                    cost_price=unit_cost,
+                )
+                inventory_service = InventoryService(db)
+                await inventory_service.apply_confirmed_new_product(
+                    business_id=item["business_id"],
+                    product_id=product.id,
+                    quantity=quantity,
+                    unit_cost=unit_cost,
+                    created_by=item["created_by"],
+                )
+            reply = (
+                f"✅ Producto añadido: *{item['product_name']}*\n"
+                f"Stock inicial: {item['quantity']} unidades."
+            )
+
+    # Si quedan más productos pendientes de un albarán anterior, encadenamos
+    # la siguiente pregunta justo después de resolver esta.
+    next_item = pending_confirmation_service.peek_next(sender_phone)
+    if next_item:
+        reply += "\n\n" + _next_question_text(next_item)
+
+    return reply
+
+
+def _next_question_text(item: dict) -> str:
+    return (
+        f"📦 Producto nuevo detectado: *{item['product_name']}*\n"
+        f"Cantidad: {item['quantity']} | Coste unidad: {item['unit_cost']}€\n\n"
+        f"¿Lo añado al catálogo? Responde *SI* para confirmar o *NO* para descartarlo."
+    )
 
 
 @router.post("/webhook/whatsapp")
@@ -50,5 +136,12 @@ async def whatsapp_webhook(
         }
         task = process_albaran.delay(payload)
         return {"status": "queued", "task_id": task.id}
+
+    # Paso 4 — si no hay imagen, comprobar si es respuesta a una pregunta
+    # de confirmación de producto nuevo pendiente.
+    confirmation_reply = await _handle_pending_confirmation_reply(sender_phone, Body)
+    if confirmation_reply is not None:
+        twilio_client.send_text(to_number=sender_phone, body=confirmation_reply)
+        return {"status": "confirmation_handled"}
 
     return {"status": "received", "body": Body}
