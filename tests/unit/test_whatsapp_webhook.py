@@ -9,7 +9,11 @@ import pytest
 # singleton embedding_client.
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-fake-key-for-unit-tests")
 
-from app.api.webhooks.whatsapp import _interpret_reply, _handle_pending_confirmation_reply
+from app.api.webhooks.whatsapp import (
+    _interpret_reply,
+    _handle_pending_confirmation_reply,
+    _handle_conversational_query,
+)
 
 
 class FakeDBSessionCtx:
@@ -143,3 +147,47 @@ async def test_confirms_product_and_chains_next_question(
 
     assert "Producto 1" in result
     assert "Producto 2" in result  # la siguiente pregunta va encadenada
+
+@pytest.mark.asyncio
+@patch("app.api.webhooks.whatsapp.handle_stock_query")
+@patch("app.api.webhooks.whatsapp.ConversationService")
+@patch("app.api.webhooks.whatsapp.get_db_session")
+async def test_conversational_query_logs_both_sides_and_returns_reply(
+    mock_get_db, mock_conversation_cls, mock_handle_query
+):
+    mock_db = AsyncMock()
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    mock_conversation = MagicMock(id="conv-1")
+    mock_conversation_cls.return_value.get_or_create_conversation = AsyncMock(return_value=mock_conversation)
+    mock_conversation_cls.return_value.log_message = AsyncMock()
+
+    mock_handle_query.return_value = {
+        "reply": "Te quedan 12 unidades de Tinte Rubio 100ml.",
+        "tool_called": "consultar_stock",
+        "tokens_input": 200,
+        "tokens_output": 30,
+    }
+
+    result = await _handle_conversational_query("business-1", "+34600000001", "qué me queda de tinte rubio")
+
+    assert result == "Te quedan 12 unidades de Tinte Rubio 100ml."
+    mock_conversation_cls.return_value.get_or_create_conversation.assert_called_once_with(
+        business_id="business-1",
+        participant_phone="+34600000001",
+        participant_type="owner",
+    )
+    assert mock_conversation_cls.return_value.log_message.await_count == 2
+
+    inbound_call = mock_conversation_cls.return_value.log_message.call_args_list[0].kwargs
+    assert inbound_call["direction"] == "inbound"
+    assert inbound_call["content_text"] == "qué me queda de tinte rubio"
+
+    outbound_call = mock_conversation_cls.return_value.log_message.call_args_list[1].kwargs
+    assert outbound_call["direction"] == "outbound"
+    assert outbound_call["content_text"] == "Te quedan 12 unidades de Tinte Rubio 100ml."
+    assert outbound_call["llm_tool_called"] == "consultar_stock"
+    assert outbound_call["llm_tokens_input"] == 200
+    assert outbound_call["llm_tokens_output"] == 30
+
+    mock_db.commit.assert_awaited_once()

@@ -11,6 +11,8 @@ from app.models.business import Business
 from app.domain.catalog.pending_confirmations import pending_confirmation_service
 from app.domain.catalog.service import CatalogService
 from app.domain.inventory.service import InventoryService
+from app.domain.conversations.service import ConversationService
+from app.domain.conversations.query_handler import handle_stock_query
 
 router = APIRouter()
 
@@ -96,6 +98,44 @@ def _next_question_text(item: dict) -> str:
     )
 
 
+async def _handle_conversational_query(business_id: str, sender_phone: str, body: str) -> str:
+    # Trata el mensaje como una pregunta en lenguaje natural (ej. "qué me
+    # queda de tinte rubio") usando Claude con function calling. Loguea
+    # ambos lados de la conversación en conversation_messages para poder
+    # analizar coste y calidad de las respuestas más adelante.
+    # participant_type="owner" por ahora: la resolución de business_id
+    # actual solo identifica al número registrado como dueño del negocio;
+    # diferenciar empleado/cliente final llega en Fase 4.
+    async with get_db_session() as db:
+        conversation_service = ConversationService(db)
+        conversation = await conversation_service.get_or_create_conversation(
+            business_id=business_id,
+            participant_phone=sender_phone,
+            participant_type="owner",
+        )
+        await conversation_service.log_message(
+            conversation_id=conversation.id,
+            direction="inbound",
+            content_type="text",
+            content_text=body,
+        )
+
+        result = await handle_stock_query(db, business_id=business_id, query_text=body)
+
+        await conversation_service.log_message(
+            conversation_id=conversation.id,
+            direction="outbound",
+            content_type="text",
+            content_text=result["reply"],
+            llm_intent=result["tool_called"],
+            llm_tool_called=result["tool_called"],
+            llm_tokens_input=result["tokens_input"],
+            llm_tokens_output=result["tokens_output"],
+        )
+        await db.commit()
+        return result["reply"]
+
+
 @router.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     request: Request,
@@ -143,5 +183,12 @@ async def whatsapp_webhook(
     if confirmation_reply is not None:
         twilio_client.send_text(to_number=sender_phone, body=confirmation_reply)
         return {"status": "confirmation_handled"}
+
+    # Paso 5 — si no era una confirmación pendiente y conocemos el negocio,
+    # tratamos el mensaje como una consulta conversacional (Fase 2).
+    if business_id and Body.strip():
+        reply = await _handle_conversational_query(business_id, sender_phone, Body)
+        twilio_client.send_text(to_number=sender_phone, body=reply)
+        return {"status": "query_handled"}
 
     return {"status": "received", "body": Body}
