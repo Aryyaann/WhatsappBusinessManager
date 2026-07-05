@@ -1,7 +1,8 @@
 import enum
 import uuid
+from datetime import date
 
-from sqlalchemy import Enum, Numeric, Text, ForeignKey
+from sqlalchemy import Enum, Numeric, Text, String, Date, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -56,6 +57,12 @@ class StockMovement(BaseModel):
     unit_cost: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     reference_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Capturados desde el albarán (Textract + Claude) cuando el proveedor los
+    # indica. Nullable porque no todos los albaranes traen esta información.
+    # Sin estos dos campos no se pueden construir alertas de caducidad
+    # (Fase 3) ni trazabilidad de lote.
+    expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    lot_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
