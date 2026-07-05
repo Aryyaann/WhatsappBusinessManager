@@ -7,6 +7,9 @@ from app.models.supplier import Supplier
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderLine
 from app.models.conversation import Conversation, ConversationMessage
 from app.models.appointment import Appointment
+from app.models.service import Service
+from app.models.employee_schedule import EmployeeSchedule
+from app.models.employee_service import EmployeeService
 
 __all__ = [
     "Base",
@@ -22,4 +25,7 @@ __all__ = [
     "Conversation",
     "ConversationMessage",
     "Appointment",
+    "Service",
+    "EmployeeSchedule",
+    "EmployeeService",
 ]
