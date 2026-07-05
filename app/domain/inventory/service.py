@@ -53,6 +53,8 @@ class InventoryService:
                 quantity=line.quantity,
                 unit_cost=line.unit_cost,
                 created_by=created_by,
+                expiry_date=line.expiry_date,
+                lot_number=line.lot_number,
             )
             applied.append(line.product_name)
 
@@ -66,6 +68,8 @@ class InventoryService:
         quantity: Decimal,
         unit_cost: Decimal,
         created_by: str,
+        expiry_date=None,
+        lot_number: str = None,
     ) -> None:
         # Se usa cuando el dueño confirma por WhatsApp un producto que antes
         # no existía en el catálogo (ver PendingConfirmationService). El
@@ -79,6 +83,8 @@ class InventoryService:
             quantity=quantity,
             unit_cost=unit_cost,
             created_by=created_by,
+            expiry_date=expiry_date,
+            lot_number=lot_number,
         )
         await self.db.commit()
 
@@ -145,9 +151,13 @@ class InventoryService:
         quantity: Decimal,
         unit_cost: Decimal,
         created_by: str,
+        expiry_date=None,
+        lot_number: str = None,
     ) -> None:
         # Crea un registro inmutable en stock_movements.
         # movement_type="purchase" porque viene de un albarán de proveedor.
+        # expiry_date/lot_number son opcionales — no todos los proveedores
+        # los indican en el albarán.
         movement = StockMovement(
             business_id=business_id,
             product_id=product_id,
@@ -155,5 +165,7 @@ class InventoryService:
             quantity=quantity,
             unit_cost=unit_cost,
             created_by=created_by,
+            expiry_date=expiry_date,
+            lot_number=lot_number,
         )
         self.db.add(movement)

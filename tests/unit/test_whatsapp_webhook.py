@@ -120,6 +120,8 @@ async def test_confirms_product_creates_it_and_applies_stock(
         quantity=Decimal("2"),
         unit_cost=Decimal("100"),
         created_by="user-1",
+        expiry_date=None,
+        lot_number=None,
     )
     assert "Producto añadido" in result
     assert "Producto 1" in result
@@ -191,3 +193,33 @@ async def test_conversational_query_logs_both_sides_and_returns_reply(
     assert outbound_call["llm_tokens_output"] == 30
 
     mock_db.commit.assert_awaited_once()
+
+@pytest.mark.asyncio
+@patch("app.api.webhooks.whatsapp.InventoryService")
+@patch("app.api.webhooks.whatsapp.CatalogService")
+@patch("app.api.webhooks.whatsapp.get_db_session")
+@patch("app.api.webhooks.whatsapp.pending_confirmation_service")
+async def test_confirms_product_passes_expiry_date_and_lot_number(
+    mock_pending, mock_get_db, mock_catalog_cls, mock_inventory_cls
+):
+    item = make_pending_item(expiry_date="2026-12-31", lot_number="LOTE-42")
+    mock_pending.peek_next.side_effect = [item, None]
+    mock_pending.pop_next.return_value = item
+
+    mock_db = AsyncMock()
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+    mock_catalog_cls.return_value.create_product = AsyncMock(return_value=MagicMock(id="product-new-1"))
+    mock_inventory_cls.return_value.apply_confirmed_new_product = AsyncMock()
+
+    await _handle_pending_confirmation_reply("+34600000001", "si")
+
+    from datetime import date
+    mock_inventory_cls.return_value.apply_confirmed_new_product.assert_called_once_with(
+        business_id="business-1",
+        product_id="product-new-1",
+        quantity=Decimal("2"),
+        unit_cost=Decimal("100"),
+        created_by="user-1",
+        expiry_date=date(2026, 12, 31),
+        lot_number="LOTE-42",
+    )

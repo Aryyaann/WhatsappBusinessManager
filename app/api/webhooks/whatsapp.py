@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -75,6 +76,8 @@ async def _handle_pending_confirmation_reply(sender_phone: str, body: str) -> Op
                     quantity=quantity,
                     unit_cost=unit_cost,
                     created_by=item["created_by"],
+                    expiry_date=date.fromisoformat(item["expiry_date"]) if item.get("expiry_date") else None,
+                    lot_number=item.get("lot_number"),
                 )
             reply = (
                 f"✅ Producto añadido: *{item['product_name']}*\n"

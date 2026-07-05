@@ -123,6 +123,83 @@ async def test_apply_albaran_product_found_updates_stock():
 
 
 @pytest.mark.asyncio
+async def test_apply_confirmed_new_product_creates_stock_and_movement():
+    db = AsyncMock(spec=AsyncSession)
+    mock_stock = MagicMock()
+    mock_stock.quantity = Decimal("0")
+    db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=mock_stock))
+
+    service = InventoryService(db)
+    await service.apply_confirmed_new_product(
+        business_id="business-1",
+        product_id="product-1",
+        quantity=Decimal("5"),
+        unit_cost=Decimal("20"),
+        created_by="user-1",
+    )
+
+    assert mock_stock.quantity == Decimal("5")
+    db.commit.assert_awaited()
+
+@pytest.mark.asyncio
+async def test_apply_confirmed_new_product_persists_expiry_and_lot():
+    from datetime import date
+
+    db = AsyncMock(spec=AsyncSession)
+    mock_stock = MagicMock()
+    mock_stock.quantity = Decimal("0")
+    db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=mock_stock))
+
+    service = InventoryService(db)
+    await service.apply_confirmed_new_product(
+        business_id="business-1",
+        product_id="product-1",
+        quantity=Decimal("5"),
+        unit_cost=Decimal("20"),
+        created_by="user-1",
+        expiry_date=date(2026, 12, 31),
+        lot_number="LOTE-42",
+    )
+
+    # db.add fue llamado con el StockMovement real (no un mock) — comprobamos
+    # sus atributos directamente.
+    added_movement = db.add.call_args[0][0]
+    assert added_movement.expiry_date == date(2026, 12, 31)
+    assert added_movement.lot_number == "LOTE-42"
+
+
+@pytest.mark.asyncio
+async def test_apply_albaran_persists_expiry_and_lot_from_line():
+    from datetime import date
+
+    db = AsyncMock(spec=AsyncSession)
+    mock_product = MagicMock()
+    mock_product.id = "product-uuid-1"
+    mock_stock = MagicMock()
+    mock_stock.quantity = Decimal("0")
+    db.execute.side_effect = [
+        MagicMock(scalar_one_or_none=MagicMock(return_value=mock_product)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value=mock_stock)),
+    ]
+
+    service = InventoryService(db)
+    line = AlbaranLine(
+        product_name="Tinte Rubio",
+        quantity=Decimal("10"),
+        unit_cost=Decimal("5"),
+        expiry_date=date(2027, 3, 15),
+        lot_number="LOTE-99",
+    )
+    result = make_result([line])
+
+    await service.apply_albaran("business-1", result, "user-1")
+
+    added_movement = db.add.call_args[0][0]
+    assert added_movement.expiry_date == date(2027, 3, 15)
+    assert added_movement.lot_number == "LOTE-99"
+
+
+@pytest.mark.asyncio
 async def test_apply_albaran_no_auto_lines():
     db = AsyncMock(spec=AsyncSession)
     service = InventoryService(db)
