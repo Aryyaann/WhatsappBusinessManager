@@ -88,6 +88,46 @@ async def test_routes_to_appointment_tool(mock_anthropic, mock_execute_appointme
         {"employee_name": "Ana", "service_name": "Corte", "date": "2026-07-13"},
     )
 
+@pytest.mark.asyncio
+@patch("app.domain.conversations.assistant_handler.anthropic_client")
+async def test_history_is_prepended_to_messages(mock_anthropic):
+    mock_anthropic.chat_with_tools.return_value = make_response([make_text_block("¡Hola de nuevo!")])
+    history = [
+        {"role": "user", "content": "quiero un corte con Ana"},
+        {"role": "assistant", "content": "¿Para qué fecha?"},
+    ]
+
+    await handle_assistant_request(
+        db=MagicMock(), business_id="business-1", customer_phone="+34600000099",
+        message_text="para mañana", history=history,
+    )
+
+    sent_messages = mock_anthropic.chat_with_tools.call_args.kwargs["messages"]
+    assert sent_messages[0] == history[0]
+    assert sent_messages[1] == history[1]
+    assert sent_messages[2] == {"role": "user", "content": "para mañana"}
+
+
+@pytest.mark.asyncio
+@patch("app.domain.conversations.assistant_handler.anthropic_client")
+async def test_no_history_defaults_to_just_the_new_message(mock_anthropic):
+    mock_anthropic.chat_with_tools.return_value = make_response([make_text_block("Hola")])
+
+    await handle_assistant_request(
+        db=MagicMock(), business_id="business-1", customer_phone="+34600000099",
+        message_text="hola",
+    )
+
+    sent_messages = mock_anthropic.chat_with_tools.call_args.kwargs["messages"]
+    assert sent_messages == [{"role": "user", "content": "hola"}]
+
+
+def test_system_prompt_includes_todays_date():
+    from app.domain.conversations.assistant_handler import _build_system_prompt
+    from datetime import date
+
+    prompt = _build_system_prompt()
+    assert date.today().isoformat() in prompt
 
 @pytest.mark.asyncio
 @patch("app.domain.conversations.assistant_handler.anthropic_client")

@@ -1,3 +1,5 @@
+from datetime import date
+
 from app.infrastructure.llm.anthropic_client import anthropic_client
 from app.domain.inventory.stock_query_service import StockQueryService
 from app.domain.conversations.query_handler import CONSULTAR_STOCK_TOOL, _serialize_stock_results
@@ -12,16 +14,25 @@ from app.domain.appointments.booking_handler import (
 # única conversación, para que Claude pueda atender tanto preguntas de stock
 # como de citas sin que el dueño tenga que "elegir" de antemano de qué tema
 # va a hablar.
-SYSTEM_PROMPT_ASSISTANT = """
-Eres el asistente de WhatsApp de un negocio. Ayudas al dueño con dos cosas:
+def _build_system_prompt() -> str:
+    # La fecha de hoy se inyecta dinámicamente porque Claude no tiene
+    # noción de "hoy" por sí solo — sin esto no puede resolver expresiones
+    # como "mañana" o "el lunes que viene".
+    today = date.today()
+    return f"""
+Eres el asistente de WhatsApp de un negocio. Hoy es {today.strftime('%A %d de %B de %Y')} ({today.isoformat()}).
+Ayudas al dueño con dos cosas:
 
 1. Consultar el stock de productos — usa consultar_stock.
 2. Gestionar citas — usa consultar_disponibilidad_citas para ver huecos
    libres, y reservar_cita solo cuando el cliente haya confirmado
-   explícitamente una hora concreta de las disponibles.
+   explícitamente una hora concreta de las disponibles. Si el cliente da
+   una fecha relativa ("mañana", "el lunes"), calcúlala tú mismo a partir
+   de la fecha de hoy — no se lo preguntes salvo que sea genuinamente ambiguo.
 
 Responde siempre en español, de forma breve y natural.
 """
+
 
 ALL_TOOLS = [CONSULTAR_STOCK_TOOL, CONSULTAR_DISPONIBILIDAD_TOOL, RESERVAR_CITA_TOOL]
 
@@ -47,19 +58,25 @@ async def _execute_tool(db, business_id: str, customer_phone: str, tool_name: st
     return f"Herramienta desconocida: {tool_name}"
 
 
-async def handle_assistant_request(db, business_id: str, customer_phone: str, message_text: str) -> dict:
+async def handle_assistant_request(
+    db, business_id: str, customer_phone: str, message_text: str, history: list[dict] = None
+) -> dict:
     # Mismo patrón de bucle multi-turno que booking_handler.handle_appointment_request,
-    # pero con el conjunto combinado de herramientas.
-    messages = [{"role": "user", "content": message_text}]
+    # pero con el conjunto combinado de herramientas y, opcionalmente, el
+    # historial reciente de la conversación (para que Claude recuerde lo
+    # que ya se dijo en mensajes anteriores de WhatsApp).
+    messages = list(history) if history else []
+    messages.append({"role": "user", "content": message_text})
     tokens_input = 0
     tokens_output = 0
     tools_called = []
+    system_prompt = _build_system_prompt()
 
     for _ in range(MAX_TURNS):
         response = anthropic_client.chat_with_tools(
             messages=messages,
             tools=ALL_TOOLS,
-            system_prompt=SYSTEM_PROMPT_ASSISTANT,
+            system_prompt=system_prompt,
         )
         tokens_input += response.usage.input_tokens
         tokens_output += response.usage.output_tokens

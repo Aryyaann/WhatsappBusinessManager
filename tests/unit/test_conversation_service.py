@@ -94,3 +94,29 @@ async def test_log_message_accepts_optional_llm_metadata():
     assert message.llm_tokens_input == 150
     assert message.llm_tokens_output == 40
     assert message.llm_cost_usd == 0.002
+
+
+@pytest.mark.asyncio
+async def test_get_recent_messages_returns_in_chronological_order():
+    # La query pide más recientes primero (para poder limitar bien), pero
+    # el método debe devolverlos en orden cronológico (más viejo primero).
+    msg_new = MagicMock(content_text="segundo mensaje")
+    msg_old = MagicMock(content_text="primer mensaje")
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[msg_new, msg_old]))))
+
+    service = ConversationService(db)
+    messages = await service.get_recent_messages("conv-1", limit=10)
+
+    assert [m.content_text for m in messages] == ["primer mensaje", "segundo mensaje"]
+
+
+@pytest.mark.asyncio
+async def test_get_recent_messages_returns_empty_list_when_no_history():
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
+
+    service = ConversationService(db)
+    messages = await service.get_recent_messages("conv-1")
+
+    assert messages == []

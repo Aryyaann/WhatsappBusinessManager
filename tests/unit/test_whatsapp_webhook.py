@@ -162,6 +162,7 @@ async def test_conversational_query_logs_both_sides_and_returns_reply(
 
     mock_conversation = MagicMock(id="conv-1")
     mock_conversation_cls.return_value.get_or_create_conversation = AsyncMock(return_value=mock_conversation)
+    mock_conversation_cls.return_value.get_recent_messages = AsyncMock(return_value=[])
     mock_conversation_cls.return_value.log_message = AsyncMock()
 
     mock_handle_query.return_value = {
@@ -223,3 +224,37 @@ async def test_confirms_product_passes_expiry_date_and_lot_number(
         expiry_date=date(2026, 12, 31),
         lot_number="LOTE-42",
     )
+
+@pytest.mark.asyncio
+@patch("app.api.webhooks.whatsapp.handle_assistant_request")
+@patch("app.api.webhooks.whatsapp.ConversationService")
+@patch("app.api.webhooks.whatsapp.get_db_session")
+async def test_conversational_query_passes_converted_history_to_assistant(
+    mock_get_db, mock_conversation_cls, mock_handle_query
+):
+    mock_db = AsyncMock()
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    mock_conversation = MagicMock(id="conv-1")
+    mock_conversation_cls.return_value.get_or_create_conversation = AsyncMock(return_value=mock_conversation)
+
+    prior_inbound = MagicMock(direction="inbound", content_text="quiero un corte con Ana")
+    prior_outbound = MagicMock(direction="outbound", content_text="¿Para qué fecha?")
+    mock_conversation_cls.return_value.get_recent_messages = AsyncMock(return_value=[prior_inbound, prior_outbound])
+    mock_conversation_cls.return_value.log_message = AsyncMock()
+
+    mock_handle_query.return_value = {
+        "reply": "Vale, para mañana entonces.",
+        "tools_called": [],
+        "tokens_input": 50,
+        "tokens_output": 10,
+    }
+
+    await _handle_conversational_query("business-1", "+34600000001", "para mañana")
+
+    call_kwargs = mock_handle_query.call_args.kwargs
+    assert call_kwargs["history"] == [
+        {"role": "user", "content": "quiero un corte con Ana"},
+        {"role": "assistant", "content": "¿Para qué fecha?"},
+    ]
+    assert call_kwargs["message_text"] == "para mañana"

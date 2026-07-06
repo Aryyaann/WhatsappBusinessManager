@@ -69,6 +69,7 @@ class ConversationService:
             created_at=datetime.now(timezone.utc),
         )
         self.db.add(message)
+        
 
         # Actualiza el contador y timestamp de la conversación padre.
         result = await self.db.execute(
@@ -80,3 +81,22 @@ class ConversationService:
 
         await self.db.flush()
         return message
+    
+    async def get_recent_messages(
+        self, conversation_id: str, limit: int = 10
+    ) -> list[ConversationMessage]:
+        # Últimos `limit` mensajes de texto de la conversación, en orden
+        # cronológico (más antiguo primero) — así es como Claude espera
+        # recibir el historial. Solo mensajes de texto: las imágenes de
+        # albaranes no forman parte de esta conversación conversacional.
+        result = await self.db.execute(
+            select(ConversationMessage)
+            .where(
+                ConversationMessage.conversation_id == conversation_id,
+                ConversationMessage.content_type == "text",
+            )
+            .order_by(ConversationMessage.created_at.desc())
+            .limit(limit)
+        )
+        messages = result.scalars().all()
+        return list(reversed(messages))

@@ -117,6 +117,17 @@ async def _handle_conversational_query(business_id: str, sender_phone: str, body
             participant_phone=sender_phone,
             participant_type="owner",
         )
+
+        # Recuperamos el historial ANTES de loguear el mensaje actual, para
+        # no duplicarlo en la lista que le pasamos a Claude. Sin esto,
+        # cada mensaje de WhatsApp era una conversación nueva para Claude
+        # aunque nosotros sí tuviéramos todo guardado en base de datos.
+        recent_messages = await conversation_service.get_recent_messages(conversation.id)
+        history = [
+            {"role": "user" if m.direction == "inbound" else "assistant", "content": m.content_text}
+            for m in recent_messages
+        ]
+
         await conversation_service.log_message(
             conversation_id=conversation.id,
             direction="inbound",
@@ -125,7 +136,7 @@ async def _handle_conversational_query(business_id: str, sender_phone: str, body
         )
 
         result = await handle_assistant_request(
-            db, business_id=business_id, customer_phone=sender_phone, message_text=body
+            db, business_id=business_id, customer_phone=sender_phone, message_text=body, history=history
         )
         tools_called_str = ", ".join(result["tools_called"]) if result["tools_called"] else None
 
