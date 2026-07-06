@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.api.webhooks.whatsapp import router as whatsapp_router
+from app.api.admin.products import router as admin_products_router
 
 # Instancia principal de FastAPI con metadata básica.
 app = FastAPI(
@@ -12,6 +13,7 @@ app = FastAPI(
 # Registramos el router del webhook.
 # Todos los endpoints de whatsapp.py quedan accesibles desde la raíz.
 app.include_router(whatsapp_router)
+app.include_router(admin_products_router)
 
 
 @app.get("/health")
