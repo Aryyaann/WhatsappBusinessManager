@@ -151,7 +151,7 @@ async def test_confirms_product_and_chains_next_question(
     assert "Producto 2" in result  # la siguiente pregunta va encadenada
 
 @pytest.mark.asyncio
-@patch("app.api.webhooks.whatsapp.handle_stock_query")
+@patch("app.api.webhooks.whatsapp.handle_assistant_request")
 @patch("app.api.webhooks.whatsapp.ConversationService")
 @patch("app.api.webhooks.whatsapp.get_db_session")
 async def test_conversational_query_logs_both_sides_and_returns_reply(
@@ -166,7 +166,7 @@ async def test_conversational_query_logs_both_sides_and_returns_reply(
 
     mock_handle_query.return_value = {
         "reply": "Te quedan 12 unidades de Tinte Rubio 100ml.",
-        "tool_called": "consultar_stock",
+        "tools_called": ["consultar_stock"],
         "tokens_input": 200,
         "tokens_output": 30,
     }
