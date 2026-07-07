@@ -12,9 +12,14 @@ export interface Appointment {
   notes: string | null
 }
 
-export async function fetchAppointments(businessId: string): Promise<Appointment[]> {
+function authHeaders(idToken: string): HeadersInit {
+  return { Authorization: `Bearer ${idToken}` }
+}
+
+export async function fetchAppointments(businessId: string, idToken: string): Promise<Appointment[]> {
   const response = await fetch(
     `/api/admin/appointments?business_id=${encodeURIComponent(businessId)}`,
+    { headers: authHeaders(idToken) },
   )
   if (!response.ok) {
     throw new Error(`Error ${response.status} al cargar las citas`)
@@ -26,12 +31,13 @@ export async function updateAppointmentStatus(
   businessId: string,
   appointmentId: string,
   status: AppointmentStatus,
+  idToken: string,
 ): Promise<void> {
   const response = await fetch(
     `/api/admin/appointments/${appointmentId}/status?business_id=${encodeURIComponent(businessId)}`,
     {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders(idToken) },
       body: JSON.stringify({ status }),
     },
   )

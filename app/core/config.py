@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     s3_bucket_name: str = ""
     sqs_queue_url: str = ""
 
+    # Cognito (autenticación del panel de administración)
+    cognito_user_pool_id: str = ""
+    cognito_app_client_id: str = ""
+
     # Anthropic
     anthropic_api_key: str = ""
 
