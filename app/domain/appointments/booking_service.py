@@ -29,6 +29,7 @@ class BookingService:
         duration_minutes: int,
         customer_name: Optional[str] = None,
         notes: Optional[str] = None,
+        service_id: Optional[str] = None,
     ) -> Appointment:
         # Revalidamos que el hueco sigue libre justo antes de reservar —
         # entre que el cliente vio los huecos disponibles y confirma,
@@ -46,6 +47,7 @@ class BookingService:
         appointment = Appointment(
             business_id=business_id,
             assigned_to=user_id,
+            service_id=service_id,
             customer_phone=customer_phone,
             customer_name=customer_name,
             start_at=start_at,

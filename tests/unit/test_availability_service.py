@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -73,6 +73,32 @@ async def test_existing_appointment_splits_available_slots():
     assert datetime(2026, 7, 6, 9, 30) not in slots  # ocupado
     assert datetime(2026, 7, 6, 10, 0) in slots
     assert datetime(2026, 7, 6, 10, 30) in slots
+
+
+@pytest.mark.asyncio
+async def test_existing_appointment_with_timezone_aware_datetimes_does_not_crash():
+    # Regresión: Postgres devuelve start_at/end_at con tzinfo (columna
+    # TIMESTAMP WITH TIME ZONE) aunque el código las construya naive al
+    # calcular huecos. Sin la normalización a naive, esto lanzaba
+    # "TypeError: can't compare offset-naive and offset-aware datetimes"
+    # en real, algo que los tests con mocks naive no detectaban.
+    db = AsyncMock(spec=AsyncSession)
+    aware_appointment = MagicMock(
+        start_at=datetime(2026, 7, 6, 9, 30, tzinfo=timezone.utc),
+        end_at=datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc),
+    )
+    mock_execute_sequence(
+        db,
+        [make_schedule(9, 0, 11, 0)],
+        [aware_appointment],
+    )
+
+    service = AvailabilityService(db)
+    slots = await service.get_available_slots("user-1", MONDAY, duration_minutes=30)
+
+    assert datetime(2026, 7, 6, 9, 0) in slots
+    assert datetime(2026, 7, 6, 9, 30) not in slots  # ocupado
+    assert datetime(2026, 7, 6, 10, 0) in slots
 
 
 @pytest.mark.asyncio

@@ -52,7 +52,16 @@ class AvailabilityService:
                 Appointment.status.in_(BLOCKING_STATUSES),
             )
         )
-        busy_intervals = [(a.start_at, a.end_at) for a in appt_result.scalars().all()]
+        # .replace(tzinfo=None): start_at/end_at vienen de Postgres como
+        # aware (columna TIMESTAMP WITH TIME ZONE), pero interval_start/
+        # interval_end de abajo se construyen a mano con datetime.combine()
+        # y son naive. Sin esto, comparar ambos lanza TypeError. Todo el
+        # cálculo de huecos en este servicio trabaja en "hora de pared"
+        # naive, consistente con cómo se crean las citas en booking_service.
+        busy_intervals = [
+            (a.start_at.replace(tzinfo=None), a.end_at.replace(tzinfo=None))
+            for a in appt_result.scalars().all()
+        ]
 
         # 3. Para cada tramo de horario, restar las citas ocupadas y trocear
         # el resto en huecos exactos del tamaño del servicio pedido.

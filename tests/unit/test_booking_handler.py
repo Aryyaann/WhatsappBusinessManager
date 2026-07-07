@@ -142,6 +142,7 @@ async def test_books_appointment_successfully(mock_anthropic, mock_lookup_cls, m
         start_at=datetime(2026, 7, 6, 9, 0),
         duration_minutes=30,
         customer_name="Lucía",
+        service_id="service-1",
     )
 
 

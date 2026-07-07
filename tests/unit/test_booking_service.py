@@ -31,9 +31,32 @@ async def test_books_appointment_when_slot_is_available(mock_availability_cls):
     assert appointment.customer_phone == "+34600000099"
     assert appointment.customer_name == "Lucía"
     assert appointment.end_at == datetime(2026, 7, 6, 9, 30)
+    assert appointment.service_id is None
     db.add.assert_called_once()
     db.commit.assert_awaited_once()
     db.refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("app.domain.appointments.booking_service.AvailabilityService")
+async def test_books_appointment_stores_service_id_when_given(mock_availability_cls):
+    requested_slot = datetime(2026, 7, 6, 9, 0)
+    mock_availability_cls.return_value.get_available_slots = AsyncMock(
+        return_value=[requested_slot]
+    )
+    db = AsyncMock(spec=AsyncSession)
+
+    service = BookingService(db)
+    appointment = await service.book_appointment(
+        business_id="business-1",
+        user_id="user-1",
+        customer_phone="+34600000099",
+        start_at=requested_slot,
+        duration_minutes=30,
+        service_id="service-1",
+    )
+
+    assert appointment.service_id == "service-1"
 
 
 @pytest.mark.asyncio

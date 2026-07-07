@@ -112,6 +112,7 @@ async def _execute_tool(db, business_id: str, customer_phone: str, tool_name: st
                 start_at=start_at,
                 duration_minutes=service.duration_minutes,
                 customer_name=tool_input.get("customer_name"),
+                service_id=str(service.id),
             )
         except SlotNoLongerAvailableError as exc:
             return str(exc)

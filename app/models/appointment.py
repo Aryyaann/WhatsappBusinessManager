@@ -32,6 +32,14 @@ class Appointment(BaseModel):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Servicio reservado (ej. "Corte de pelo"). Nullable porque las citas
+    # creadas antes de este campo no lo tienen, y porque un servicio podría
+    # borrarse en el futuro sin que queramos perder el historial de la cita.
+    service_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("services.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     start_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[AppointmentStatusEnum] = mapped_column(
@@ -44,3 +52,4 @@ class Appointment(BaseModel):
 
     business: Mapped["Business"] = relationship("Business")
     assigned_user: Mapped["User"] = relationship("User")
+    service: Mapped["Service"] = relationship("Service")
