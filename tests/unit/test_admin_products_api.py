@@ -81,3 +81,83 @@ def test_list_products_requires_business_id_param():
     response = client.get("/api/admin/products")
 
     assert response.status_code == 422
+
+
+@patch("app.api.admin.products.InventoryService")
+@patch("app.api.admin.products.get_db_session")
+def test_adjust_stock_updates_quantity(mock_get_db, mock_inventory_cls):
+    mock_db = AsyncMock()
+    mock_product = MagicMock()
+    mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=mock_product))
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+    mock_inventory_cls.return_value.set_stock_quantity = AsyncMock()
+
+    response = client.patch(
+        "/api/admin/products/product-1/stock",
+        params={"business_id": "business-1"},
+        json={"quantity": 15},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "product_id": "product-1", "quantity": 15.0}
+    mock_inventory_cls.return_value.set_stock_quantity.assert_called_once_with(
+        business_id="business-1", product_id="product-1", new_quantity=Decimal("15")
+    )
+
+
+@patch("app.api.admin.products.get_db_session")
+def test_adjust_stock_returns_404_when_product_not_found(mock_get_db):
+    mock_db = AsyncMock()
+    mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    response = client.patch(
+        "/api/admin/products/missing-id/stock",
+        params={"business_id": "business-1"},
+        json={"quantity": 15},
+    )
+
+    assert response.status_code == 404
+
+
+def test_adjust_stock_rejects_negative_quantity():
+    response = client.patch(
+        "/api/admin/products/product-1/stock",
+        params={"business_id": "business-1"},
+        json={"quantity": -5},
+    )
+
+    assert response.status_code == 422
+
+
+@patch("app.api.admin.products.get_db_session")
+def test_update_threshold_sets_new_value(mock_get_db):
+    mock_db = AsyncMock()
+    mock_product = MagicMock(min_stock_threshold=0)
+    mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=mock_product))
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    response = client.patch(
+        "/api/admin/products/product-1/threshold",
+        params={"business_id": "business-1"},
+        json={"min_stock_threshold": 10},
+    )
+
+    assert response.status_code == 200
+    assert mock_product.min_stock_threshold == 10
+    mock_db.commit.assert_awaited_once()
+
+
+@patch("app.api.admin.products.get_db_session")
+def test_update_threshold_returns_404_when_product_not_found(mock_get_db):
+    mock_db = AsyncMock()
+    mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    response = client.patch(
+        "/api/admin/products/missing-id/threshold",
+        params={"business_id": "business-1"},
+        json={"min_stock_threshold": 10},
+    )
+
+    assert response.status_code == 404

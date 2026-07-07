@@ -1,11 +1,23 @@
-from fastapi import APIRouter
+from decimal import Decimal
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from app.core.database import get_db_session
 from app.models.product import Product
 from app.models.stock import StockLevel
+from app.domain.inventory.service import InventoryService
 from sqlalchemy import select
 
 router = APIRouter()
+
+
+class StockAdjustmentRequest(BaseModel):
+    quantity: Decimal = Field(ge=0, description="Nuevo stock absoluto, no un delta")
+
+
+class ThresholdUpdateRequest(BaseModel):
+    min_stock_threshold: int = Field(ge=0)
 
 
 @router.get("/api/admin/products")
@@ -38,3 +50,42 @@ async def list_products(business_id: str):
             }
             for row in rows
         ]
+
+
+@router.patch("/api/admin/products/{product_id}/stock")
+async def adjust_stock(product_id: str, body: StockAdjustmentRequest, business_id: str):
+    # Ajuste manual del stock (ej. corregir un conteo tras un inventario
+    # físico). Fija un valor absoluto, no suma — y queda registrado como
+    # movimiento tipo "adjustment" en InventoryService.set_stock_quantity.
+    async with get_db_session() as db:
+        product = (
+            await db.execute(
+                select(Product).where(Product.id == product_id, Product.business_id == business_id)
+            )
+        ).scalar_one_or_none()
+        if product is None:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+        service = InventoryService(db)
+        await service.set_stock_quantity(
+            business_id=business_id,
+            product_id=product_id,
+            new_quantity=body.quantity,
+        )
+        return {"status": "ok", "product_id": product_id, "quantity": float(body.quantity)}
+
+
+@router.patch("/api/admin/products/{product_id}/threshold")
+async def update_threshold(product_id: str, body: ThresholdUpdateRequest, business_id: str):
+    async with get_db_session() as db:
+        product = (
+            await db.execute(
+                select(Product).where(Product.id == product_id, Product.business_id == business_id)
+            )
+        ).scalar_one_or_none()
+        if product is None:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+        product.min_stock_threshold = body.min_stock_threshold
+        await db.commit()
+        return {"status": "ok", "product_id": product_id, "min_stock_threshold": body.min_stock_threshold}

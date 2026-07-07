@@ -212,3 +212,43 @@ async def test_apply_albaran_no_auto_lines():
     assert outcome["applied"] == []
     assert outcome["skipped"] == []
     db.execute.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_set_stock_quantity_updates_existing_stock_and_logs_adjustment():
+    db = AsyncMock(spec=AsyncSession)
+    mock_stock = MagicMock()
+    mock_stock.quantity = Decimal("10")
+    db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=mock_stock))
+
+    service = InventoryService(db)
+    await service.set_stock_quantity(
+        business_id="business-1",
+        product_id="product-1",
+        new_quantity=Decimal("25"),
+    )
+
+    assert mock_stock.quantity == Decimal("25")
+    added_movement = db.add.call_args[0][0]
+    assert added_movement.movement_type == "adjustment"
+    assert added_movement.quantity == Decimal("15")  # delta: 25 - 10
+    db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_stock_quantity_creates_stock_level_when_missing():
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+
+    service = InventoryService(db)
+    await service.set_stock_quantity(
+        business_id="business-1",
+        product_id="product-1",
+        new_quantity=Decimal("8"),
+    )
+
+    # Dos llamadas a add: el StockLevel nuevo y el StockMovement.
+    assert db.add.call_count == 2
+    added_stock_level = db.add.call_args_list[0][0][0]
+    added_movement = db.add.call_args_list[1][0][0]
+    assert added_stock_level.quantity == Decimal("8")
+    assert added_movement.quantity == Decimal("8")  # delta: 8 - 0

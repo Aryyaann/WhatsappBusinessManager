@@ -88,6 +88,46 @@ class InventoryService:
         )
         await self.db.commit()
 
+    async def set_stock_quantity(
+        self,
+        business_id: str,
+        product_id: str,
+        new_quantity: Decimal,
+        adjusted_by: str = None,
+    ) -> None:
+        # Ajuste manual desde el panel: fija el stock a un valor absoluto
+        # (a diferencia de los albaranes, que suman). Deja constancia del
+        # cambio como movimiento tipo "adjustment" para no perder
+        # trazabilidad — un stock que cambia solo, sin rastro, es peor que
+        # uno que no cambia nunca.
+        result = await self.db.execute(
+            select(StockLevel).where(
+                StockLevel.business_id == business_id,
+                StockLevel.product_id == product_id,
+            )
+        )
+        stock = result.scalar_one_or_none()
+        previous_quantity = stock.quantity if stock else Decimal("0")
+        delta = new_quantity - previous_quantity
+
+        if stock:
+            stock.quantity = new_quantity
+        else:
+            self.db.add(StockLevel(
+                business_id=business_id,
+                product_id=product_id,
+                quantity=new_quantity,
+            ))
+
+        self.db.add(StockMovement(
+            business_id=business_id,
+            product_id=product_id,
+            movement_type="adjustment",
+            quantity=delta,
+            created_by=adjusted_by,
+        ))
+        await self.db.commit()
+
     async def _find_product(self, business_id: str, name: str):
         # 1. Match exacto primero: más rápido y sin ambigüedad cuando el
         # nombre del albarán coincide literal con el catálogo.
