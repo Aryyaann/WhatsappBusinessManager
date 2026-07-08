@@ -11,8 +11,6 @@ import { fetchCurrentUser, type CurrentUser } from './api/me'
 import { ProductsTable } from './components/ProductsTable'
 import { AppointmentsTable } from './components/AppointmentsTable'
 
-const STORAGE_KEY = 'wbm.businessId'
-
 type Tab = 'inventario' | 'citas'
 
 function signOutRedirect() {
@@ -26,12 +24,14 @@ function App() {
   const auth = useAuth()
   const idToken = auth.user?.id_token ?? ''
 
-  const [businessId, setBusinessId] = useState(() => localStorage.getItem(STORAGE_KEY) ?? '')
   const [activeTab, setActiveTab] = useState<Tab>('inventario')
 
-  // --- Usuario autenticado (confirma de punta a punta que el backend
-  // reconoce el token de Cognito, no solo que el login "parece" ir bien) ---
+  // --- Usuario autenticado. Ya no pedimos un business_id a mano: en
+  // cuanto el backend confirma quién eres, ya sabe a qué negocio
+  // perteneces (current_user.business_id), y los endpoints de abajo lo
+  // derivan solos del token — nunca de algo que mande el navegador. ---
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
+  const [meStatus, setMeStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle')
   const [meError, setMeError] = useState('')
 
   // --- Inventario ---
@@ -47,10 +47,10 @@ function App() {
   const [appointmentsError, setAppointmentsError] = useState('')
   const [statusFilter, setStatusFilter] = useState<AppointmentStatus | 'all'>('all')
 
-  function loadProducts(id: string) {
+  function loadProducts() {
     setProductsStatus('loading')
     setProductsError('')
-    fetchProducts(id, idToken)
+    fetchProducts(idToken)
       .then((data) => {
         setProducts(data)
         setProductsStatus('ready')
@@ -61,10 +61,10 @@ function App() {
       })
   }
 
-  function loadAppointments(id: string) {
+  function loadAppointments() {
     setAppointmentsStatus('loading')
     setAppointmentsError('')
-    fetchAppointments(id, idToken)
+    fetchAppointments(idToken)
       .then((data) => {
         setAppointments(data)
         setAppointmentsStatus('ready')
@@ -75,29 +75,34 @@ function App() {
       })
   }
 
-  // Al autenticarse, confirmamos con el backend quién es el usuario real.
+  // Paso 1: confirmar con el backend quién es el usuario (y a qué negocio
+  // pertenece). Solo si esto va bien tiene sentido pedir inventario/citas.
   useEffect(() => {
     if (!auth.isAuthenticated || !idToken) {
       setCurrentUser(null)
+      setMeStatus('idle')
       return
     }
+    setMeStatus('loading')
     setMeError('')
     fetchCurrentUser(idToken)
-      .then(setCurrentUser)
-      .catch((error: Error) => setMeError(error.message))
+      .then((user) => {
+        setCurrentUser(user)
+        setMeStatus('ready')
+      })
+      .catch((error: Error) => {
+        setMeError(error.message)
+        setMeStatus('error')
+      })
   }, [auth.isAuthenticated, idToken])
 
+  // Paso 2: una vez confirmado el usuario, cargar sus datos.
   useEffect(() => {
-    if (!businessId || !idToken) {
-      setProductsStatus('idle')
-      setAppointmentsStatus('idle')
-      return
-    }
-    localStorage.setItem(STORAGE_KEY, businessId)
-    loadProducts(businessId)
-    loadAppointments(businessId)
+    if (meStatus !== 'ready') return
+    loadProducts()
+    loadAppointments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [businessId, idToken])
+  }, [meStatus])
 
   const filteredProducts = useMemo(() => {
     return products.filter((product) => {
@@ -115,18 +120,18 @@ function App() {
   }, [appointments, statusFilter])
 
   async function handleAdjustStock(productId: string, quantity: number) {
-    await adjustStock(businessId, productId, quantity, idToken)
-    loadProducts(businessId)
+    await adjustStock(productId, quantity, idToken)
+    loadProducts()
   }
 
   async function handleUpdateThreshold(productId: string, threshold: number) {
-    await updateThreshold(businessId, productId, threshold, idToken)
-    loadProducts(businessId)
+    await updateThreshold(productId, threshold, idToken)
+    loadProducts()
   }
 
   async function handleUpdateAppointmentStatus(appointmentId: string, status: AppointmentStatus) {
-    await updateAppointmentStatus(businessId, appointmentId, status, idToken)
-    loadAppointments(businessId)
+    await updateAppointmentStatus(appointmentId, status, idToken)
+    loadAppointments()
   }
 
   // --- Pantallas de estado de autenticación ---
@@ -163,7 +168,37 @@ function App() {
     )
   }
 
-  // --- Panel (usuario autenticado) ---
+  if (meStatus === 'loading' || meStatus === 'idle') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-neutral-950 text-neutral-400">
+        Verificando tu sesión…
+      </div>
+    )
+  }
+
+  if (meStatus === 'error') {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-neutral-950 px-6 text-center">
+        <p className="text-sm text-red-400">No se pudo verificar el usuario contra el backend: {meError}</p>
+        {auth.user?.profile?.sub && (
+          <p className="max-w-md text-xs text-amber-300">
+            Tu <code className="text-amber-200">sub</code> de Cognito es:{' '}
+            <code className="select-all text-amber-200">{auth.user.profile.sub}</code> — pásaselo al script{' '}
+            <code className="text-amber-200">link_cognito_user.py</code> para enlazar tu usuario.
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={() => signOutRedirect()}
+          className="mt-2 rounded-md border border-neutral-800 px-3 py-1.5 text-xs text-neutral-400 hover:bg-neutral-900"
+        >
+          Cerrar sesión
+        </button>
+      </div>
+    )
+  }
+
+  // --- Panel (usuario autenticado y reconocido por el backend) ---
 
   return (
     <div className="min-h-screen bg-neutral-950 px-6 py-10 text-neutral-100">
@@ -182,18 +217,6 @@ function App() {
                 {currentUser.role === 'owner' ? 'dueño' : 'empleado'})
               </p>
             )}
-            {meError && (
-              <div className="mt-2 rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-300">
-                <p>No se pudo verificar el usuario contra el backend: {meError}</p>
-                {auth.user?.profile?.sub && (
-                  <p className="mt-1">
-                    Tu <code className="text-amber-200">sub</code> de Cognito es:{' '}
-                    <code className="select-all text-amber-200">{auth.user.profile.sub}</code>
-                    {' '}— pásaselo al script <code className="text-amber-200">link_cognito_user.py</code> para enlazar tu usuario.
-                  </p>
-                )}
-              </div>
-            )}
           </div>
           <button
             type="button"
@@ -203,20 +226,6 @@ function App() {
             Cerrar sesión
           </button>
         </header>
-
-        <div className="mb-6">
-          <label htmlFor="business-id" className="mb-1 block text-xs font-medium text-neutral-500">
-            ID de negocio (temporal — todavía no hay multi-tenancy automático)
-          </label>
-          <input
-            id="business-id"
-            type="text"
-            value={businessId}
-            onChange={(event) => setBusinessId(event.target.value.trim())}
-            placeholder="ej. d62a4701-f49a-4f90-8503-9d59346f91e5"
-            className="w-full max-w-md rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-neutral-600"
-          />
-        </div>
 
         <div className="mb-6 flex gap-1 border-b border-neutral-800">
           <button
@@ -243,11 +252,7 @@ function App() {
           </button>
         </div>
 
-        {!businessId && (
-          <p className="text-sm text-neutral-500">Introduce un ID de negocio para empezar.</p>
-        )}
-
-        {businessId && activeTab === 'inventario' && (
+        {activeTab === 'inventario' && (
           <>
             {productsStatus === 'loading' && products.length === 0 && (
               <p className="text-sm text-neutral-500">Cargando productos…</p>
@@ -292,7 +297,7 @@ function App() {
           </>
         )}
 
-        {businessId && activeTab === 'citas' && (
+        {activeTab === 'citas' && (
           <>
             {appointmentsStatus === 'loading' && appointments.length === 0 && (
               <p className="text-sm text-neutral-500">Cargando citas…</p>

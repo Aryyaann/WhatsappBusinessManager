@@ -4,11 +4,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-fake-key-for-unit-tests")
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.auth import get_current_user
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def authenticated_as_business_1():
+    # La mayoría de tests de este archivo asumen un usuario ya autenticado
+    # perteneciente a "business-1" — los tests que quieran probar el caso
+    # sin autenticación limpian el override ellos mismos.
+    mock_user = MagicMock(business_id="business-1")
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    yield
+    app.dependency_overrides.clear()
 
 
 class FakeDBSessionCtx:
@@ -41,7 +54,7 @@ def test_list_products_returns_serialized_products(mock_get_db):
     ]))
     mock_get_db.return_value = FakeDBSessionCtx(mock_db)
 
-    response = client.get("/api/admin/products", params={"business_id": "business-1"})
+    response = client.get("/api/admin/products")
 
     assert response.status_code == 200
     data = response.json()
@@ -59,7 +72,7 @@ def test_list_products_defaults_quantity_to_zero_when_no_stock_row(mock_get_db):
     ]))
     mock_get_db.return_value = FakeDBSessionCtx(mock_db)
 
-    response = client.get("/api/admin/products", params={"business_id": "business-1"})
+    response = client.get("/api/admin/products")
 
     assert response.status_code == 200
     assert response.json()[0]["quantity"] == 0.0
@@ -71,16 +84,19 @@ def test_list_products_returns_empty_list_when_no_products(mock_get_db):
     mock_db.execute.return_value = MagicMock(all=MagicMock(return_value=[]))
     mock_get_db.return_value = FakeDBSessionCtx(mock_db)
 
-    response = client.get("/api/admin/products", params={"business_id": "business-1"})
+    response = client.get("/api/admin/products")
 
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_list_products_requires_business_id_param():
+def test_list_products_requires_authentication():
+    # Sin override de get_current_user (y sin header Authorization real),
+    # el endpoint debe rechazar la petición antes de tocar la base de datos.
+    app.dependency_overrides.clear()
     response = client.get("/api/admin/products")
 
-    assert response.status_code == 422
+    assert response.status_code == 401
 
 
 @patch("app.api.admin.products.InventoryService")
@@ -94,7 +110,6 @@ def test_adjust_stock_updates_quantity(mock_get_db, mock_inventory_cls):
 
     response = client.patch(
         "/api/admin/products/product-1/stock",
-        params={"business_id": "business-1"},
         json={"quantity": 15},
     )
 
@@ -113,7 +128,6 @@ def test_adjust_stock_returns_404_when_product_not_found(mock_get_db):
 
     response = client.patch(
         "/api/admin/products/missing-id/stock",
-        params={"business_id": "business-1"},
         json={"quantity": 15},
     )
 
@@ -123,7 +137,6 @@ def test_adjust_stock_returns_404_when_product_not_found(mock_get_db):
 def test_adjust_stock_rejects_negative_quantity():
     response = client.patch(
         "/api/admin/products/product-1/stock",
-        params={"business_id": "business-1"},
         json={"quantity": -5},
     )
 
@@ -139,7 +152,6 @@ def test_update_threshold_sets_new_value(mock_get_db):
 
     response = client.patch(
         "/api/admin/products/product-1/threshold",
-        params={"business_id": "business-1"},
         json={"min_stock_threshold": 10},
     )
 
@@ -156,7 +168,6 @@ def test_update_threshold_returns_404_when_product_not_found(mock_get_db):
 
     response = client.patch(
         "/api/admin/products/missing-id/threshold",
-        params={"business_id": "business-1"},
         json={"min_stock_threshold": 10},
     )
 

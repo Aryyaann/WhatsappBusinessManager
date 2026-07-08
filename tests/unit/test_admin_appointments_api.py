@@ -4,12 +4,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-fake-key-for-unit-tests")
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.auth import get_current_user
 from app.models.appointment import AppointmentStatusEnum
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def authenticated_as_business_1():
+    mock_user = MagicMock(business_id="business-1")
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    yield
+    app.dependency_overrides.clear()
 
 
 class FakeDBSessionCtx:
@@ -39,9 +49,6 @@ def make_row(
     appointment.end_at = datetime(2026, 7, 13, 9, 30)
     appointment.status = status
     appointment.notes = notes
-    # Row-like objeto que soporta tanto acceso por atributo (row.Appointment)
-    # como por índice (row[1], row[2]) porque select(Appointment, User.name,
-    # Service.name) devuelve una Row así.
     row = MagicMock()
     row.Appointment = appointment
     row.__getitem__ = lambda self, idx: [appointment, employee_name, service_name][idx]
@@ -54,7 +61,7 @@ def test_list_appointments_returns_serialized_appointments(mock_get_db):
     mock_db.execute.return_value = MagicMock(all=MagicMock(return_value=[make_row()]))
     mock_get_db.return_value = FakeDBSessionCtx(mock_db)
 
-    response = client.get("/api/admin/appointments", params={"business_id": "business-1"})
+    response = client.get("/api/admin/appointments")
 
     assert response.status_code == 200
     data = response.json()
@@ -74,7 +81,7 @@ def test_list_appointments_allows_null_service_name(mock_get_db):
     )
     mock_get_db.return_value = FakeDBSessionCtx(mock_db)
 
-    response = client.get("/api/admin/appointments", params={"business_id": "business-1"})
+    response = client.get("/api/admin/appointments")
 
     assert response.status_code == 200
     assert response.json()[0]["service_name"] is None
@@ -86,16 +93,17 @@ def test_list_appointments_returns_empty_list_when_no_appointments(mock_get_db):
     mock_db.execute.return_value = MagicMock(all=MagicMock(return_value=[]))
     mock_get_db.return_value = FakeDBSessionCtx(mock_db)
 
-    response = client.get("/api/admin/appointments", params={"business_id": "business-1"})
+    response = client.get("/api/admin/appointments")
 
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_list_appointments_requires_business_id_param():
+def test_list_appointments_requires_authentication():
+    app.dependency_overrides.clear()
     response = client.get("/api/admin/appointments")
 
-    assert response.status_code == 422
+    assert response.status_code == 401
 
 
 @patch("app.api.admin.appointments.get_db_session")
@@ -109,7 +117,6 @@ def test_update_status_sets_new_value(mock_get_db):
 
     response = client.patch(
         "/api/admin/appointments/appt-1/status",
-        params={"business_id": "business-1"},
         json={"status": "confirmed"},
     )
 
@@ -126,7 +133,6 @@ def test_update_status_returns_404_when_appointment_not_found(mock_get_db):
 
     response = client.patch(
         "/api/admin/appointments/missing-id/status",
-        params={"business_id": "business-1"},
         json={"status": "confirmed"},
     )
 
@@ -136,7 +142,6 @@ def test_update_status_returns_404_when_appointment_not_found(mock_get_db):
 def test_update_status_rejects_invalid_status_value():
     response = client.patch(
         "/api/admin/appointments/appt-1/status",
-        params={"business_id": "business-1"},
         json={"status": "not_a_real_status"},
     )
 

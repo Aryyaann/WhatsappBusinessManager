@@ -1,13 +1,15 @@
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
+from app.core.auth import get_current_user
 from app.core.database import get_db_session
+from app.domain.inventory.service import InventoryService
 from app.models.product import Product
 from app.models.stock import StockLevel
-from app.domain.inventory.service import InventoryService
-from sqlalchemy import select
+from app.models.user import User
 
 router = APIRouter()
 
@@ -21,11 +23,11 @@ class ThresholdUpdateRequest(BaseModel):
 
 
 @router.get("/api/admin/products")
-async def list_products(business_id: str):
-    # NOTA: sin autenticación todavía. business_id llega como query param sin
-    # verificar contra ninguna sesión — es un placeholder deliberado hasta
-    # que montemos login/sesión para el panel (paso posterior de Fase 5).
-    # No usar este endpoint tal cual en producción.
+async def list_products(current_user: User = Depends(get_current_user)):
+    # business_id ya NO llega como query param del cliente — se deriva del
+    # usuario autenticado (get_current_user), así que no hay forma de que
+    # un negocio pida datos de otro negocio cambiando un parámetro a mano.
+    business_id = str(current_user.business_id)
     async with get_db_session() as db:
         stmt = (
             select(Product, StockLevel.quantity)
@@ -53,10 +55,15 @@ async def list_products(business_id: str):
 
 
 @router.patch("/api/admin/products/{product_id}/stock")
-async def adjust_stock(product_id: str, body: StockAdjustmentRequest, business_id: str):
+async def adjust_stock(
+    product_id: str,
+    body: StockAdjustmentRequest,
+    current_user: User = Depends(get_current_user),
+):
     # Ajuste manual del stock (ej. corregir un conteo tras un inventario
     # físico). Fija un valor absoluto, no suma — y queda registrado como
     # movimiento tipo "adjustment" en InventoryService.set_stock_quantity.
+    business_id = str(current_user.business_id)
     async with get_db_session() as db:
         product = (
             await db.execute(
@@ -76,7 +83,12 @@ async def adjust_stock(product_id: str, body: StockAdjustmentRequest, business_i
 
 
 @router.patch("/api/admin/products/{product_id}/threshold")
-async def update_threshold(product_id: str, body: ThresholdUpdateRequest, business_id: str):
+async def update_threshold(
+    product_id: str,
+    body: ThresholdUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    business_id = str(current_user.business_id)
     async with get_db_session() as db:
         product = (
             await db.execute(

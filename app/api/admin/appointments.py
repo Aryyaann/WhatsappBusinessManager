@@ -1,11 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.core.auth import get_current_user
 from app.core.database import get_db_session
 from app.models.appointment import Appointment, AppointmentStatusEnum
-from app.models.user import User
 from app.models.service import Service
+from app.models.user import User
 
 router = APIRouter()
 
@@ -15,9 +16,10 @@ class AppointmentStatusUpdateRequest(BaseModel):
 
 
 @router.get("/api/admin/appointments")
-async def list_appointments(business_id: str):
-    # NOTA: sin autenticación todavía, igual que /api/admin/products — mismo
-    # placeholder deliberado hasta que montemos login/sesión (Fase 5).
+async def list_appointments(current_user: User = Depends(get_current_user)):
+    # business_id ya NO llega como query param del cliente — se deriva del
+    # usuario autenticado, igual que en admin/products.py.
+    business_id = str(current_user.business_id)
     async with get_db_session() as db:
         stmt = (
             select(Appointment, User.name, Service.name)
@@ -45,7 +47,12 @@ async def list_appointments(business_id: str):
 
 
 @router.patch("/api/admin/appointments/{appointment_id}/status")
-async def update_appointment_status(appointment_id: str, body: AppointmentStatusUpdateRequest, business_id: str):
+async def update_appointment_status(
+    appointment_id: str,
+    body: AppointmentStatusUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    business_id = str(current_user.business_id)
     async with get_db_session() as db:
         appointment = (
             await db.execute(
