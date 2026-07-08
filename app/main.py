@@ -5,6 +5,7 @@ from app.api.webhooks.whatsapp import router as whatsapp_router
 from app.api.admin.products import router as admin_products_router
 from app.api.admin.appointments import router as admin_appointments_router
 from app.api.admin.me import router as admin_me_router
+from app.api.admin.onboarding import router as admin_onboarding_router
 
 # Instancia principal de FastAPI con metadata básica.
 app = FastAPI(
@@ -18,6 +19,7 @@ app.include_router(whatsapp_router)
 app.include_router(admin_products_router)
 app.include_router(admin_appointments_router)
 app.include_router(admin_me_router)
+app.include_router(admin_onboarding_router)
 
 
 @app.get("/health")

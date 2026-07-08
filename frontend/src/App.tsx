@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { adjustStock, fetchProducts, updateThreshold, type Product } from './api/products'
 import {
@@ -7,7 +7,8 @@ import {
   type Appointment,
   type AppointmentStatus,
 } from './api/appointments'
-import { fetchCurrentUser, type CurrentUser } from './api/me'
+import { fetchCurrentUser, ApiError, type CurrentUser } from './api/me'
+import { createBusiness } from './api/onboarding'
 import { ProductsTable } from './components/ProductsTable'
 import { AppointmentsTable } from './components/AppointmentsTable'
 
@@ -31,8 +32,15 @@ function App() {
   // perteneces (current_user.business_id), y los endpoints de abajo lo
   // derivan solos del token — nunca de algo que mande el navegador. ---
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
-  const [meStatus, setMeStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle')
+  const [meStatus, setMeStatus] = useState<'idle' | 'loading' | 'error' | 'not_onboarded' | 'ready'>('idle')
   const [meError, setMeError] = useState('')
+
+  // --- Formulario de alta de negocio (solo se usa si meStatus === 'not_onboarded') ---
+  const [signupBusinessName, setSignupBusinessName] = useState('')
+  const [signupOwnerName, setSignupOwnerName] = useState('')
+  const [signupWhatsappNumber, setSignupWhatsappNumber] = useState('')
+  const [signupSubmitting, setSignupSubmitting] = useState(false)
+  const [signupError, setSignupError] = useState('')
 
   // --- Inventario ---
   const [products, setProducts] = useState<Product[]>([])
@@ -75,6 +83,26 @@ function App() {
       })
   }
 
+  function checkCurrentUser() {
+    setMeStatus('loading')
+    setMeError('')
+    fetchCurrentUser(idToken)
+      .then((user) => {
+        setCurrentUser(user)
+        setMeStatus('ready')
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 403) {
+          // Token válido, pero sin User local enlazado todavía — este es
+          // el caso normal de "negocio nuevo", no un fallo real.
+          setMeStatus('not_onboarded')
+          return
+        }
+        setMeError(error instanceof Error ? error.message : 'Error desconocido')
+        setMeStatus('error')
+      })
+  }
+
   // Paso 1: confirmar con el backend quién es el usuario (y a qué negocio
   // pertenece). Solo si esto va bien tiene sentido pedir inventario/citas.
   useEffect(() => {
@@ -83,18 +111,23 @@ function App() {
       setMeStatus('idle')
       return
     }
-    setMeStatus('loading')
-    setMeError('')
-    fetchCurrentUser(idToken)
-      .then((user) => {
-        setCurrentUser(user)
-        setMeStatus('ready')
-      })
-      .catch((error: Error) => {
-        setMeError(error.message)
-        setMeStatus('error')
-      })
+    checkCurrentUser()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.isAuthenticated, idToken])
+
+  async function handleSignup(event: FormEvent) {
+    event.preventDefault()
+    setSignupSubmitting(true)
+    setSignupError('')
+    try {
+      await createBusiness(signupBusinessName, signupOwnerName, signupWhatsappNumber, idToken)
+      checkCurrentUser()
+    } catch (error) {
+      setSignupError(error instanceof Error ? error.message : 'Error desconocido')
+    } finally {
+      setSignupSubmitting(false)
+    }
+  }
 
   // Paso 2: una vez confirmado el usuario, cargar sus datos.
   useEffect(() => {
@@ -180,13 +213,6 @@ function App() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-neutral-950 px-6 text-center">
         <p className="text-sm text-red-400">No se pudo verificar el usuario contra el backend: {meError}</p>
-        {auth.user?.profile?.sub && (
-          <p className="max-w-md text-xs text-amber-300">
-            Tu <code className="text-amber-200">sub</code> de Cognito es:{' '}
-            <code className="select-all text-amber-200">{auth.user.profile.sub}</code> — pásaselo al script{' '}
-            <code className="text-amber-200">link_cognito_user.py</code> para enlazar tu usuario.
-          </p>
-        )}
         <button
           type="button"
           onClick={() => signOutRedirect()}
@@ -194,6 +220,71 @@ function App() {
         >
           Cerrar sesión
         </button>
+      </div>
+    )
+  }
+
+  if (meStatus === 'not_onboarded') {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-neutral-950 px-6 text-neutral-100">
+        <div className="w-full max-w-sm">
+          <h1 className="mb-1 text-xl font-semibold">Registra tu negocio</h1>
+          <p className="mb-6 text-sm text-neutral-500">
+            Es la primera vez que entras — vamos a crear tu negocio para que puedas acceder al panel.
+          </p>
+          <form onSubmit={handleSignup} className="flex flex-col gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">Nombre del negocio</label>
+              <input
+                type="text"
+                required
+                value={signupBusinessName}
+                onChange={(event) => setSignupBusinessName(event.target.value)}
+                placeholder="ej. Peluquería Ana"
+                className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-neutral-600"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">Tu nombre (dueño/a)</label>
+              <input
+                type="text"
+                required
+                value={signupOwnerName}
+                onChange={(event) => setSignupOwnerName(event.target.value)}
+                placeholder="ej. Ana García"
+                className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-neutral-600"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">
+                Número de WhatsApp del negocio
+              </label>
+              <input
+                type="text"
+                required
+                value={signupWhatsappNumber}
+                onChange={(event) => setSignupWhatsappNumber(event.target.value)}
+                placeholder="+34600000000"
+                className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-neutral-600"
+              />
+            </div>
+            {signupError && <p className="text-xs text-red-400">{signupError}</p>}
+            <button
+              type="submit"
+              disabled={signupSubmitting}
+              className="mt-2 rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-950 hover:bg-neutral-300 disabled:opacity-50"
+            >
+              {signupSubmitting ? 'Creando…' : 'Crear negocio'}
+            </button>
+          </form>
+          <button
+            type="button"
+            onClick={() => signOutRedirect()}
+            className="mt-4 text-xs text-neutral-500 hover:text-neutral-300"
+          >
+            Cerrar sesión
+          </button>
+        </div>
       </div>
     )
   }

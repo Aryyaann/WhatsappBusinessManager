@@ -60,6 +60,24 @@ def verify_cognito_token(token: str) -> dict:
     return claims
 
 
+async def get_verified_claims(authorization: str = Header(default="")) -> dict:
+    # Como get_current_user, pero sin resolver un User local — se usa en el
+    # endpoint de alta de negocio, donde el token de Cognito es válido pero
+    # todavía no existe ningún User enlazado (es precisamente lo que ese
+    # endpoint va a crear).
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Falta el header Authorization: Bearer <token>",
+        )
+
+    token = authorization.removeprefix("Bearer ")
+    try:
+        return verify_cognito_token(token)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=f"Token inválido: {exc}") from exc
+
+
 async def get_current_user(
     authorization: str = Header(default=""),
     db: AsyncSession = Depends(get_db),
