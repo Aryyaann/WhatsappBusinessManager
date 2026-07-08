@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { adjustStock, fetchProducts, updateThreshold, type Product } from './api/products'
+import { adjustStock, createProduct, fetchProducts, updateThreshold, type Product, type ProductInput } from './api/products'
 import {
   fetchAppointments,
   updateAppointmentStatus,
@@ -11,6 +11,8 @@ import { fetchCurrentUser, ApiError, type CurrentUser } from './api/me'
 import { createBusiness } from './api/onboarding'
 import { ProductsTable } from './components/ProductsTable'
 import { AppointmentsTable } from './components/AppointmentsTable'
+import { Modal } from './components/Modal'
+import { ProductForm } from './components/ProductForm'
 
 type Tab = 'inventario' | 'citas'
 
@@ -48,6 +50,7 @@ function App() {
   const [productsError, setProductsError] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [showLowStockOnly, setShowLowStockOnly] = useState(false)
+  const [showProductModal, setShowProductModal] = useState(false)
 
   // --- Citas ---
   const [appointments, setAppointments] = useState<Appointment[]>([])
@@ -151,6 +154,12 @@ function App() {
     if (statusFilter === 'all') return appointments
     return appointments.filter((appointment) => appointment.status === statusFilter)
   }, [appointments, statusFilter])
+
+  async function handleCreateProduct(input: ProductInput) {
+    await createProduct(input, idToken)
+    setShowProductModal(false)
+    loadProducts()
+  }
 
   async function handleAdjustStock(productId: string, quantity: number) {
     await adjustStock(productId, quantity, idToken)
@@ -345,6 +354,15 @@ function App() {
 
         {activeTab === 'inventario' && (
           <>
+            <div className="mb-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowProductModal(true)}
+                className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-950 hover:bg-neutral-300"
+              >
+                + Nuevo producto
+              </button>
+            </div>
             {productsStatus === 'loading' && products.length === 0 && (
               <p className="text-sm text-neutral-500">Cargando productos…</p>
             )}
@@ -428,6 +446,12 @@ function App() {
           </>
         )}
       </div>
+
+      {showProductModal && (
+        <Modal title="Nuevo producto" onClose={() => setShowProductModal(false)}>
+          <ProductForm onSubmit={handleCreateProduct} onCancel={() => setShowProductModal(false)} />
+        </Modal>
+      )}
     </div>
   )
 }

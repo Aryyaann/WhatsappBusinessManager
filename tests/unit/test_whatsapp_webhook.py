@@ -195,6 +195,39 @@ async def test_conversational_query_logs_both_sides_and_returns_reply(
 
     mock_db.commit.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+@patch("app.api.webhooks.whatsapp.handle_assistant_request")
+@patch("app.api.webhooks.whatsapp.ConversationService")
+@patch("app.api.webhooks.whatsapp.get_db_session")
+async def test_conversational_query_deduplicates_repeated_tool_calls(
+    mock_get_db, mock_conversation_cls, mock_handle_query
+):
+    # Regresión: cuando Claude llama la misma herramienta varias veces en
+    # un turno (ej. comprobando varios huecos de disponibilidad), unir la
+    # lista sin quitar duplicados podía superar el límite de la columna y
+    # tumbar el guardado del mensaje con un error de base de datos real.
+    mock_db = AsyncMock()
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    mock_conversation = MagicMock(id="conv-1")
+    mock_conversation_cls.return_value.get_or_create_conversation = AsyncMock(return_value=mock_conversation)
+    mock_conversation_cls.return_value.get_recent_messages = AsyncMock(return_value=[])
+    mock_conversation_cls.return_value.log_message = AsyncMock()
+
+    mock_handle_query.return_value = {
+        "reply": "Ana tiene disponibilidad el lunes en varios horarios.",
+        "tools_called": ["consultar_disponibilidad_citas"] * 6,
+        "tokens_input": 6304,
+        "tokens_output": 718,
+    }
+
+    await _handle_conversational_query("business-1", "+34600000001", "qué huecos tiene Ana el lunes")
+
+    outbound_call = mock_conversation_cls.return_value.log_message.call_args_list[1].kwargs
+    assert outbound_call["llm_tool_called"] == "consultar_disponibilidad_citas"
+    assert len(outbound_call["llm_tool_called"]) <= 255
+
 @pytest.mark.asyncio
 @patch("app.api.webhooks.whatsapp.InventoryService")
 @patch("app.api.webhooks.whatsapp.CatalogService")

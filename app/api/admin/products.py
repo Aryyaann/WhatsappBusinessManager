@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -7,11 +8,24 @@ from sqlalchemy import select
 from app.core.auth import get_current_user
 from app.core.database import get_db_session
 from app.domain.inventory.service import InventoryService
-from app.models.product import Product
+from app.domain.catalog.service import CatalogService
+from app.models.product import Product, UnitEnum
 from app.models.stock import StockLevel
 from app.models.user import User
 
 router = APIRouter()
+
+
+class ProductCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: Optional[str] = None
+    sku: Optional[str] = Field(default=None, max_length=100)
+    barcode: Optional[str] = Field(default=None, max_length=100)
+    category: Optional[str] = Field(default=None, max_length=100)
+    unit: UnitEnum = UnitEnum.unidad
+    cost_price: Optional[Decimal] = Field(default=None, ge=0)
+    sale_price: Optional[Decimal] = Field(default=None, ge=0)
+    min_stock_threshold: int = Field(default=0, ge=0)
 
 
 class StockAdjustmentRequest(BaseModel):
@@ -52,6 +66,39 @@ async def list_products(current_user: User = Depends(get_current_user)):
             }
             for row in rows
         ]
+
+
+@router.post("/api/admin/products")
+async def create_product(
+    body: ProductCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    # Crea un producto nuevo desde el panel. Reutiliza CatalogService, que
+    # además genera el embedding para que el producto sea encontrable por
+    # búsqueda semántica desde WhatsApp (igual que los creados vía albarán).
+    business_id = str(current_user.business_id)
+    async with get_db_session() as db:
+        service = CatalogService(db)
+        product = await service.create_product(
+            business_id=business_id,
+            name=body.name,
+            description=body.description,
+            sku=body.sku,
+            barcode=body.barcode,
+            category=body.category,
+            unit=body.unit,
+            cost_price=body.cost_price,
+            sale_price=body.sale_price,
+            min_stock_threshold=body.min_stock_threshold,
+        )
+        return {
+            "id": str(product.id),
+            "name": product.name,
+            "sku": product.sku,
+            "unit": product.unit.value,
+            "min_stock_threshold": product.min_stock_threshold,
+            "sale_price": float(product.sale_price) if product.sale_price is not None else None,
+        }
 
 
 @router.patch("/api/admin/products/{product_id}/stock")

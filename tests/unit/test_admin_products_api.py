@@ -99,6 +99,55 @@ def test_list_products_requires_authentication():
     assert response.status_code == 401
 
 
+@patch("app.api.admin.products.CatalogService")
+@patch("app.api.admin.products.get_db_session")
+def test_create_product_creates_and_returns_it(mock_get_db, mock_catalog_cls):
+    mock_db = AsyncMock()
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+    created = MagicMock()
+    created.id = "product-nuevo"
+    created.sku = "SKU-9"
+    created.unit = MagicMock(value="unidad")
+    created.min_stock_threshold = 5
+    created.sale_price = Decimal("12.50")
+    created.name = "Champú Anticaspa"
+    mock_catalog_cls.return_value.create_product = AsyncMock(return_value=created)
+
+    response = client.post(
+        "/api/admin/products",
+        json={"name": "Champú Anticaspa", "sale_price": 12.5, "min_stock_threshold": 5},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "Champú Anticaspa"
+    assert data["sale_price"] == 12.5
+    assert data["unit"] == "unidad"
+    mock_catalog_cls.return_value.create_product.assert_awaited_once()
+
+
+def test_create_product_rejects_empty_name():
+    response = client.post("/api/admin/products", json={"name": ""})
+
+    assert response.status_code == 422
+
+
+def test_create_product_rejects_negative_price():
+    response = client.post(
+        "/api/admin/products",
+        json={"name": "X", "sale_price": -3},
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_product_requires_authentication():
+    app.dependency_overrides.clear()
+    response = client.post("/api/admin/products", json={"name": "X"})
+
+    assert response.status_code == 401
+
+
 @patch("app.api.admin.products.InventoryService")
 @patch("app.api.admin.products.get_db_session")
 def test_adjust_stock_updates_quantity(mock_get_db, mock_inventory_cls):

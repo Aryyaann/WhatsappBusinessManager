@@ -138,7 +138,13 @@ async def _handle_conversational_query(business_id: str, sender_phone: str, body
         result = await handle_assistant_request(
             db, business_id=business_id, customer_phone=sender_phone, message_text=body, history=history
         )
-        tools_called_str = ", ".join(result["tools_called"]) if result["tools_called"] else None
+        # dict.fromkeys() en vez de set(): quita duplicados manteniendo el
+        # orden de primera aparición. Sin esto, si Claude llama la misma
+        # herramienta varias veces en un turno (ej. comprobando varios
+        # huecos de disponibilidad), el string repetido puede superar el
+        # límite de la columna y tumbar el guardado del mensaje entero.
+        unique_tools = list(dict.fromkeys(result["tools_called"])) if result["tools_called"] else []
+        tools_called_str = ", ".join(unique_tools) if unique_tools else None
 
         await conversation_service.log_message(
             conversation_id=conversation.id,
