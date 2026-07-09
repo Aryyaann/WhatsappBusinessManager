@@ -26,18 +26,18 @@ class AvailabilityService:
         target_date: date_type,
         duration_minutes: int,
     ) -> list[datetime]:
-        # 1. Horario del empleado para ese día de la semana (puede tener
-        # varios tramos, ej. turno partido).
-        day_of_week = target_date.weekday()
+        # 1. Horario del empleado para esa fecha concreta (puede tener
+        # varios tramos, ej. turno partido). Ya no es recurrente — si esa
+        # semana no se ha planificado todavía, simplemente no hay filas.
         schedule_result = await self.db.execute(
             select(EmployeeSchedule).where(
                 EmployeeSchedule.user_id == user_id,
-                EmployeeSchedule.day_of_week == day_of_week,
+                EmployeeSchedule.date == target_date,
             )
         )
         schedules = schedule_result.scalars().all()
         if not schedules:
-            # Sin horario ese día (ej. es su día libre) — ni merece la pena
+            # Sin horario planificado ese día — ni merece la pena
             # consultar citas.
             return []
 

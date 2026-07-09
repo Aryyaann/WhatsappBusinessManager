@@ -1,5 +1,4 @@
-from datetime import time
-from typing import List
+from datetime import date as date_type, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -13,22 +12,8 @@ from app.models.user import RoleEnum, User
 router = APIRouter()
 
 
-class ScheduleSlotInput(BaseModel):
-    day_of_week: int = Field(ge=0, le=6, description="0 = lunes ... 6 = domingo")
-    start_time: time
-    end_time: time
-
-    @field_validator("end_time")
-    @classmethod
-    def end_after_start(cls, end_time: time, info):
-        start_time = info.data.get("start_time")
-        if start_time is not None and end_time <= start_time:
-            raise ValueError("end_time debe ser posterior a start_time")
-        return end_time
-
-
 class ScheduleBlockCreateRequest(BaseModel):
-    day_of_week: int = Field(ge=0, le=6)
+    date: date_type
     start_time: time
     end_time: time
 
@@ -42,7 +27,7 @@ class ScheduleBlockCreateRequest(BaseModel):
 
 
 class ScheduleBlockUpdateRequest(BaseModel):
-    day_of_week: int = Field(ge=0, le=6)
+    date: date_type
     start_time: time
     end_time: time
 
@@ -58,7 +43,8 @@ class ScheduleBlockUpdateRequest(BaseModel):
 class EmployeeCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     whatsapp_number: str = Field(min_length=1, max_length=20)
-    schedule: List[ScheduleSlotInput] = Field(default_factory=list)
+    # Ya no se fija un horario recurrente al crear el empleado — el
+    # horario se planifica semana a semana desde el Gantt del panel.
 
 
 @router.get("/api/admin/employees")
@@ -79,11 +65,9 @@ async def list_employees(current_user: User = Depends(get_current_user)):
 
 @router.post("/api/admin/employees")
 async def create_employee(body: EmployeeCreateRequest, current_user: User = Depends(get_current_user)):
-    # Crea un empleado nuevo con su horario semanal. Sin al menos un tramo
-    # de horario, AvailabilityService nunca ofrecerá huecos para este
-    # empleado (ver test_no_schedule_returns_empty), así que dejamos crear
-    # el empleado sin horario si el dueño lo prefiere añadir luego, pero
-    # avisamos de que no podrá recibir citas hasta entonces.
+    # Crea un empleado nuevo, sin horario todavía — se planifica después
+    # semana a semana desde el Gantt. Hasta que tenga algún bloque
+    # planificado, AvailabilityService no le ofrecerá huecos por WhatsApp.
     business_id = str(current_user.business_id)
     async with get_db_session() as db:
         employee = User(
@@ -93,32 +77,23 @@ async def create_employee(body: EmployeeCreateRequest, current_user: User = Depe
             role=RoleEnum.employee,
         )
         db.add(employee)
-        await db.flush()  # para obtener employee.id antes de crear el horario
-
-        for slot in body.schedule:
-            db.add(
-                EmployeeSchedule(
-                    user_id=employee.id,
-                    day_of_week=slot.day_of_week,
-                    start_time=slot.start_time,
-                    end_time=slot.end_time,
-                )
-            )
-
         await db.commit()
+        await db.refresh(employee)
         return {
             "id": str(employee.id),
             "name": employee.name,
             "whatsapp_number": employee.whatsapp_number,
-            "schedule_slots_created": len(body.schedule),
         }
 
 
 @router.get("/api/admin/employees/schedule")
-async def get_weekly_schedule(current_user: User = Depends(get_current_user)):
-    # Horario semanal completo de todos los empleados, para pintar el
-    # Gantt. Cada bloque lleva su propio id, así que un empleado puede
-    # tener varios bloques el mismo día (turno partido).
+async def get_weekly_schedule(week_start: date_type, current_user: User = Depends(get_current_user)):
+    # Horario de todos los empleados para la semana que empieza en
+    # week_start (normalmente un lunes — el frontend siempre manda el
+    # lunes de la semana que se está viendo). Cada bloque lleva su propio
+    # id, así que un empleado puede tener varios el mismo día (turno
+    # partido).
+    week_end = week_start + timedelta(days=6)
     business_id = str(current_user.business_id)
     async with get_db_session() as db:
         employees = (
@@ -130,7 +105,9 @@ async def get_weekly_schedule(current_user: User = Depends(get_current_user)):
         schedules = (
             await db.execute(
                 select(EmployeeSchedule).where(
-                    EmployeeSchedule.user_id.in_([e.id for e in employees])
+                    EmployeeSchedule.user_id.in_([e.id for e in employees]),
+                    EmployeeSchedule.date >= week_start,
+                    EmployeeSchedule.date <= week_end,
                 )
             )
         ).scalars().all()
@@ -140,7 +117,7 @@ async def get_weekly_schedule(current_user: User = Depends(get_current_user)):
             schedule_by_employee[str(slot.user_id)].append(
                 {
                     "id": str(slot.id),
-                    "day_of_week": slot.day_of_week,
+                    "date": slot.date.isoformat(),
                     "start_time": slot.start_time.isoformat(),
                     "end_time": slot.end_time.isoformat(),
                 }
@@ -175,7 +152,7 @@ async def create_schedule_block(
 
         block = EmployeeSchedule(
             user_id=employee_id,
-            day_of_week=body.day_of_week,
+            date=body.date,
             start_time=body.start_time,
             end_time=body.end_time,
         )
@@ -184,7 +161,7 @@ async def create_schedule_block(
         await db.refresh(block)
         return {
             "id": str(block.id),
-            "day_of_week": block.day_of_week,
+            "date": block.date.isoformat(),
             "start_time": block.start_time.isoformat(),
             "end_time": block.end_time.isoformat(),
         }
@@ -220,13 +197,13 @@ async def update_schedule_block(
         if block is None:
             raise HTTPException(status_code=404, detail="Bloque de horario no encontrado")
 
-        block.day_of_week = body.day_of_week
+        block.date = body.date
         block.start_time = body.start_time
         block.end_time = body.end_time
         await db.commit()
         return {
             "id": str(block.id),
-            "day_of_week": block.day_of_week,
+            "date": block.date.isoformat(),
             "start_time": block.start_time.isoformat(),
             "end_time": block.end_time.isoformat(),
         }

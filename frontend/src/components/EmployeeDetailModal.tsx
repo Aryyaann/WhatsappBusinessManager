@@ -5,20 +5,45 @@ import { Modal } from './Modal'
 interface EmployeeDetailModalProps {
   employee: Employee
   schedule: EmployeeWeeklySchedule | undefined
+  weekStart: string // YYYY-MM-DD, lunes de la semana mostrada
   onClose: () => void
 }
 
-const DAY_LABELS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+const DAY_NAMES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+
+function parseISODate(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+function addDays(d: Date, n: number): Date {
+  const copy = new Date(d)
+  copy.setDate(copy.getDate() + n)
+  return copy
+}
+
+function formatISODate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
 function formatShort(t: string): string {
   return t.slice(0, 5)
 }
 
-export function EmployeeDetailModal({ employee, schedule, onClose }: EmployeeDetailModalProps) {
-  const blocksByDay = DAY_LABELS.map((label, dayOfWeek) => ({
-    label,
-    blocks: (schedule?.schedule ?? []).filter((b) => b.day_of_week === dayOfWeek),
-  }))
+export function EmployeeDetailModal({ employee, schedule, weekStart, onClose }: EmployeeDetailModalProps) {
+  const weekStartDate = parseISODate(weekStart)
+  const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStartDate, i))
+
+  const blocksByDay = weekDates.map((dateObj, i) => {
+    const dateIso = formatISODate(dateObj)
+    return {
+      label: `${DAY_NAMES[i]} ${dateObj.getDate()}`,
+      blocks: (schedule?.schedule ?? []).filter((b) => b.date === dateIso),
+    }
+  })
   const totalWeeklyMinutes = (schedule?.schedule ?? []).reduce((sum, b) => {
     const [sh, sm] = b.start_time.split(':').map(Number)
     const [eh, em] = b.end_time.split(':').map(Number)
@@ -35,15 +60,15 @@ export function EmployeeDetailModal({ employee, schedule, onClose }: EmployeeDet
 
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <p className="text-xs text-neutral-500">Horario semanal</p>
+            <p className="text-xs text-neutral-500">Horario de esta semana</p>
             <p className="text-xs text-neutral-500">
-              {Math.round((totalWeeklyMinutes / 60) * 10) / 10}h / semana
+              {Math.round((totalWeeklyMinutes / 60) * 10) / 10}h esta semana
             </p>
           </div>
           <div className="flex flex-col gap-1 rounded-md border border-neutral-800 bg-neutral-950 p-2">
             {blocksByDay.map(({ label, blocks }) => (
               <div key={label} className="flex items-start justify-between gap-2 text-xs">
-                <span className="w-20 shrink-0 text-neutral-400">{label}</span>
+                <span className="w-24 shrink-0 text-neutral-400">{label}</span>
                 {blocks.length === 0 ? (
                   <span className="text-neutral-700">Libre</span>
                 ) : (

@@ -4,16 +4,9 @@ export interface Employee {
   whatsapp_number: string
 }
 
-export interface ScheduleSlotInput {
-  day_of_week: number
-  start_time: string
-  end_time: string
-}
-
 export interface EmployeeInput {
   name: string
   whatsapp_number: string
-  schedule: ScheduleSlotInput[]
 }
 
 function authHeaders(idToken: string): HeadersInit {

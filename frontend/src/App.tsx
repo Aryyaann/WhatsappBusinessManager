@@ -20,6 +20,27 @@ import { EmployeeForm } from './components/EmployeeForm'
 import { ScheduleGantt } from './components/ScheduleGantt'
 import { EmployeeDetailModal } from './components/EmployeeDetailModal'
 
+function getMondayOf(d: Date): string {
+  const day = d.getDay() // 0 = domingo ... 6 = sábado
+  const diffToMonday = day === 0 ? -6 : 1 - day
+  const monday = new Date(d)
+  monday.setDate(monday.getDate() + diffToMonday)
+  const y = monday.getFullYear()
+  const m = String(monday.getMonth() + 1).padStart(2, '0')
+  const dd = String(monday.getDate()).padStart(2, '0')
+  return `${y}-${m}-${dd}`
+}
+
+function addDaysToWeekStart(weekStart: string, days: number): string {
+  const [y, m, d] = weekStart.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  date.setDate(date.getDate() + days)
+  const ny = date.getFullYear()
+  const nm = String(date.getMonth() + 1).padStart(2, '0')
+  const nd = String(date.getDate()).padStart(2, '0')
+  return `${ny}-${nm}-${nd}`
+}
+
 type Tab = 'inventario' | 'citas' | 'empleados'
 
 function signOutRedirect() {
@@ -74,6 +95,7 @@ function App() {
   const [weeklySchedule, setWeeklySchedule] = useState<EmployeeWeeklySchedule[]>([])
   const [scheduleStatus, setScheduleStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle')
   const [scheduleError, setScheduleError] = useState('')
+  const [weekStart, setWeekStart] = useState<string>(() => getMondayOf(new Date()))
 
   function loadProducts() {
     setProductsStatus('loading')
@@ -117,10 +139,10 @@ function App() {
       })
   }
 
-  function loadWeeklySchedule() {
+  function loadWeeklySchedule(forWeekStart?: string) {
     setScheduleStatus('loading')
     setScheduleError('')
-    fetchWeeklySchedule(idToken)
+    fetchWeeklySchedule(forWeekStart ?? weekStart, idToken)
       .then((data) => {
         setWeeklySchedule(data)
         setScheduleStatus('ready')
@@ -129,6 +151,26 @@ function App() {
         setScheduleError(error.message)
         setScheduleStatus('error')
       })
+  }
+
+  function changeWeek(newWeekStart: string) {
+    setWeekStart(newWeekStart)
+    // Limpiamos antes de pedir la semana nueva para no enseñar por un
+    // instante los bloques de la semana anterior bajo fechas nuevas.
+    setWeeklySchedule([])
+    loadWeeklySchedule(newWeekStart)
+  }
+
+  function handlePrevWeek() {
+    changeWeek(addDaysToWeekStart(weekStart, -7))
+  }
+
+  function handleNextWeek() {
+    changeWeek(addDaysToWeekStart(weekStart, 7))
+  }
+
+  function handleThisWeek() {
+    changeWeek(getMondayOf(new Date()))
   }
 
   function checkCurrentUser() {
@@ -561,7 +603,14 @@ function App() {
                   <p className="text-sm text-red-400">No se pudo cargar el horario: {scheduleError}</p>
                 )}
                 {scheduleStatus === 'ready' && weeklySchedule.length > 0 && (
-                  <ScheduleGantt data={weeklySchedule} idToken={idToken} />
+                  <ScheduleGantt
+                    data={weeklySchedule}
+                    weekStart={weekStart}
+                    idToken={idToken}
+                    onPrevWeek={handlePrevWeek}
+                    onNextWeek={handleNextWeek}
+                    onThisWeek={handleThisWeek}
+                  />
                 )}
               </div>
             )}
@@ -592,6 +641,7 @@ function App() {
         <EmployeeDetailModal
           employee={selectedEmployee}
           schedule={weeklySchedule.find((s) => s.employee_id === selectedEmployee.id)}
+          weekStart={weekStart}
           onClose={() => setSelectedEmployee(null)}
         />
       )}

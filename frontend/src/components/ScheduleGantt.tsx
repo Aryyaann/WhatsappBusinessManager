@@ -10,10 +10,18 @@ import { Modal } from './Modal'
 
 interface ScheduleGanttProps {
   data: EmployeeWeeklySchedule[]
+  weekStart: string // YYYY-MM-DD, lunes de la semana mostrada
   idToken: string
+  onPrevWeek: () => void
+  onNextWeek: () => void
+  onThisWeek: () => void
 }
 
-const DAY_LABELS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+const DAY_NAMES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+const MONTH_NAMES = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+]
 
 const START_HOUR = 6
 const END_HOUR = 23
@@ -35,6 +43,30 @@ const EMPLOYEE_COLORS = [
 
 function colorFor(employeeIndex: number): string {
   return EMPLOYEE_COLORS[employeeIndex % EMPLOYEE_COLORS.length]
+}
+
+// --- Utilidades de fecha (en local, sin líos de timezone con Date/UTC) ---
+
+function parseISODate(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+function formatISODate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function addDays(d: Date, n: number): Date {
+  const copy = new Date(d)
+  copy.setDate(copy.getDate() + n)
+  return copy
+}
+
+function isSameDate(a: Date, b: Date): boolean {
+  return formatISODate(a) === formatISODate(b)
 }
 
 function timeToMinutes(t: string): number {
@@ -70,33 +102,39 @@ interface HoursPopupState {
   employeeName: string
 }
 
-export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
-  // Estado local: fuente de verdad de lo que se ve en pantalla. Se
-  // actualiza al instante en cada interacción (optimista) y la llamada a
-  // la API va detrás, sin bloquear ni recargar la vista. Si la API falla,
-  // deshacemos el cambio local y avisamos.
+export function ScheduleGantt({ data, weekStart, idToken, onPrevWeek, onNextWeek, onThisWeek }: ScheduleGanttProps) {
+  const weekStartDate = parseISODate(weekStart)
+  const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStartDate, i))
+  const today = new Date()
+
   const [localData, setLocalData] = useState(data)
   const employeeIdsKey = data.map((e) => e.employee_id).sort().join(',')
-  const prevKeyRef = useRef(employeeIdsKey)
+  const prevWeekRef = useRef(weekStart)
+  const prevEmployeeIdsKeyRef = useRef(employeeIdsKey)
   const pendingCancelledRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    // Solo re-sincronizamos con el servidor cuando cambia el CONJUNTO de
-    // empleados (uno nuevo creado en otra pestaña, por ejemplo) — nunca
-    // por un cambio de horario, que ya gestionamos nosotros localmente.
-    // Así evitamos pisar ediciones locales en curso con datos viejos.
-    if (employeeIdsKey === prevKeyRef.current) return
-    prevKeyRef.current = employeeIdsKey
+    if (weekStart !== prevWeekRef.current) {
+      // Semana distinta: los datos son de otro periodo por completo.
+      prevWeekRef.current = weekStart
+      prevEmployeeIdsKeyRef.current = employeeIdsKey
+      setLocalData(data)
+      return
+    }
+    if (employeeIdsKey === prevEmployeeIdsKeyRef.current) return
+    // Misma semana, pero cambió el conjunto de empleados (uno nuevo creado
+    // en otra pestaña) — fundimos sin pisar ediciones locales en curso.
+    prevEmployeeIdsKeyRef.current = employeeIdsKey
     setLocalData((prev) => {
       const byId = new Map(prev.map((e) => [e.employee_id, e]))
       return data.map((fresh) => byId.get(fresh.employee_id) ?? fresh)
     })
-  }, [employeeIdsKey, data])
+  }, [weekStart, employeeIdsKey, data])
 
   const [templateHours, setTemplateHours] = useState<Record<string, number>>({})
   const [hoursPopup, setHoursPopup] = useState<HoursPopupState | null>(null)
   const [hoursInput, setHoursInput] = useState(String(DEFAULT_HOURS))
-  const [dragOverDay, setDragOverDay] = useState<number | null>(null)
+  const [dragOverDate, setDragOverDate] = useState<string | null>(null)
   const [error, setError] = useState('')
   const dragPayloadRef = useRef<DragPayload | null>(null)
 
@@ -110,29 +148,23 @@ export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
     )
   }
 
-  function handleCreate(employeeId: string, dayOfWeek: number, startMinutes: number, durationMinutes: number) {
+  function handleCreate(employeeId: string, dateIso: string, startMinutes: number, durationMinutes: number) {
     const tempId = makeTempId()
     const newBlock: ScheduleBlock = {
       id: tempId,
-      day_of_week: dayOfWeek,
+      date: dateIso,
       start_time: minutesToTime(startMinutes),
       end_time: minutesToTime(startMinutes + durationMinutes),
     }
-    // 1) UI al instante.
     updateEmployeeSchedule(employeeId, (blocks) => [...blocks, newBlock])
 
-    // 2) Persistir en segundo plano, sin bloquear ni recargar nada.
-    createScheduleBlock(employeeId, dayOfWeek, newBlock.start_time, newBlock.end_time, idToken)
+    createScheduleBlock(employeeId, dateIso, newBlock.start_time, newBlock.end_time, idToken)
       .then((created) => {
         if (pendingCancelledRef.current.has(tempId)) {
-          // Se borró localmente antes de que el servidor respondiera —
-          // borramos también en el servidor y no lo volvemos a mostrar.
           pendingCancelledRef.current.delete(tempId)
           deleteScheduleBlock(employeeId, created.id, idToken).catch(() => {})
           return
         }
-        // Sustituimos el id temporal por el real, conservando la posición
-        // actual (por si el usuario ya lo movió mientras se guardaba).
         updateEmployeeSchedule(employeeId, (blocks) =>
           blocks.map((b) => (b.id === tempId ? { ...b, id: created.id } : b)),
         )
@@ -143,26 +175,24 @@ export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
       })
   }
 
-  function handleMove(employeeId: string, block: ScheduleBlock, dayOfWeek: number, startMinutes: number) {
+  function handleMove(employeeId: string, block: ScheduleBlock, dateIso: string, startMinutes: number) {
     const duration = timeToMinutes(block.end_time) - timeToMinutes(block.start_time)
     const previous = block
     const updated: ScheduleBlock = {
       ...block,
-      day_of_week: dayOfWeek,
+      date: dateIso,
       start_time: minutesToTime(startMinutes),
       end_time: minutesToTime(startMinutes + duration),
     }
 
     updateEmployeeSchedule(employeeId, (blocks) => blocks.map((b) => (b.id === block.id ? updated : b)))
 
-    if (block.id.startsWith(TEMP_PREFIX)) return // aún creándose; ya tiene la posición nueva, se persistirá sola
+    if (block.id.startsWith(TEMP_PREFIX)) return
 
-    updateScheduleBlock(employeeId, block.id, dayOfWeek, updated.start_time, updated.end_time, idToken).catch(
-      (err) => {
-        setError(err instanceof Error ? err.message : 'Error al mover el turno')
-        updateEmployeeSchedule(employeeId, (blocks) => blocks.map((b) => (b.id === block.id ? previous : b)))
-      },
-    )
+    updateScheduleBlock(employeeId, block.id, dateIso, updated.start_time, updated.end_time, idToken).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Error al mover el turno')
+      updateEmployeeSchedule(employeeId, (blocks) => blocks.map((b) => (b.id === block.id ? previous : b)))
+    })
   }
 
   function handleDelete(employeeId: string, blockId: string) {
@@ -172,8 +202,6 @@ export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
     updateEmployeeSchedule(employeeId, (blocks) => blocks.filter((b) => b.id !== blockId))
 
     if (blockId.startsWith(TEMP_PREFIX)) {
-      // Todavía no existe en el servidor — lo marcamos para borrarlo en
-      // cuanto termine de crearse.
       pendingCancelledRef.current.add(blockId)
       return
     }
@@ -186,25 +214,21 @@ export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
     })
   }
 
-  function handleDrop(event: React.DragEvent<HTMLDivElement>, dayOfWeek: number) {
+  function handleDrop(event: React.DragEvent<HTMLDivElement>, dateIso: string) {
     event.preventDefault()
-    setDragOverDay(null)
+    setDragOverDate(null)
     const payload = dragPayloadRef.current
     dragPayloadRef.current = null
     if (!payload) return
 
     const rect = event.currentTarget.getBoundingClientRect()
     const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
-    // Ya no recortamos el inicio en función de la duración — un bloque
-    // puede soltarse en cualquier punto de la ventana visible aunque su
-    // final se salga de ella (se recorta solo visualmente al pintarlo).
-    // Antes esto impedía soltar bloques largos pasadas ciertas horas.
     const startMinutes = snap(ratio * TOTAL_MINUTES) + START_HOUR * 60
 
     if (payload.kind === 'new') {
-      handleCreate(payload.employeeId, dayOfWeek, startMinutes - START_HOUR * 60, payload.durationMinutes)
+      handleCreate(payload.employeeId, dateIso, startMinutes - START_HOUR * 60, payload.durationMinutes)
     } else {
-      handleMove(payload.employeeId, payload.block, dayOfWeek, startMinutes - START_HOUR * 60)
+      handleMove(payload.employeeId, payload.block, dateIso, startMinutes - START_HOUR * 60)
     }
   }
 
@@ -222,13 +246,10 @@ export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
 
   const hourStepPct = 100 / (END_HOUR - START_HOUR)
   const halfStepPct = hourStepPct / 2
-  // Marcas cada 30 min para el eje: la hora en punto se ve más marcada
-  // (número normal), la media hora más tenue (":30" pequeño).
   const halfHourMarks = Array.from({ length: (END_HOUR - START_HOUR) * 2 + 1 }, (_, i) => {
-    const totalHalfHours = i
-    const hour = START_HOUR + Math.floor(totalHalfHours / 2)
-    const isHalf = totalHalfHours % 2 === 1
-    return { hour, isHalf, leftPct: totalHalfHours * halfStepPct }
+    const hour = START_HOUR + Math.floor(i / 2)
+    const isHalf = i % 2 === 1
+    return { hour, isHalf, leftPct: i * halfStepPct }
   })
   const gridlineBackground = {
     backgroundImage: [
@@ -237,8 +258,43 @@ export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
     ].join(', '),
   }
 
+  const weekEndDate = weekDates[6]
+  const rangeLabel =
+    weekStartDate.getMonth() === weekEndDate.getMonth()
+      ? `${weekStartDate.getDate()} – ${weekEndDate.getDate()} de ${MONTH_NAMES[weekStartDate.getMonth()]} de ${weekStartDate.getFullYear()}`
+      : `${weekStartDate.getDate()} de ${MONTH_NAMES[weekStartDate.getMonth()]} – ${weekEndDate.getDate()} de ${MONTH_NAMES[weekEndDate.getMonth()]} de ${weekEndDate.getFullYear()}`
+
   return (
     <div>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onPrevWeek}
+            aria-label="Semana anterior"
+            className="rounded-md border border-neutral-800 px-2 py-1 text-sm text-neutral-400 hover:bg-neutral-800"
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            onClick={onNextWeek}
+            aria-label="Semana siguiente"
+            className="rounded-md border border-neutral-800 px-2 py-1 text-sm text-neutral-400 hover:bg-neutral-800"
+          >
+            →
+          </button>
+          <button
+            type="button"
+            onClick={onThisWeek}
+            className="rounded-md border border-neutral-800 px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-800"
+          >
+            Hoy
+          </button>
+        </div>
+        <p className="text-sm font-medium text-neutral-300">{rangeLabel}</p>
+      </div>
+
       {error && (
         <p className="mb-2 text-xs text-red-400">
           {error}{' '}
@@ -265,40 +321,42 @@ export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          {DAY_LABELS.map((dayLabel, dayOfWeek) => {
-            const employeesThisDay = localData.filter((e) => e.schedule.some((b) => b.day_of_week === dayOfWeek))
+          {weekDates.map((dateObj, dayIndex) => {
+            const dateIso = formatISODate(dateObj)
+            const employeesThisDay = localData.filter((e) => e.schedule.some((b) => b.date === dateIso))
             const laneHeight = 20
             const rowHeight = Math.max(34, employeesThisDay.length * laneHeight + 4)
+            const isToday = isSameDate(dateObj, today)
 
             return (
-              <div key={dayLabel} className="flex items-center">
-                <div className="shrink-0 pr-2 text-xs text-neutral-400" style={{ width: 88 }}>
-                  {dayLabel}
+              <div key={dateIso} className="flex items-center">
+                <div
+                  className={`shrink-0 pr-2 text-xs ${isToday ? 'text-neutral-100' : 'text-neutral-400'}`}
+                  style={{ width: 88 }}
+                >
+                  {DAY_NAMES[dayIndex]} <span className="text-neutral-600">{dateObj.getDate()}</span>
+                  {isToday && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-sky-400" />}
                 </div>
                 <div
                   onDragOver={(event) => {
                     event.preventDefault()
-                    setDragOverDay(dayOfWeek)
+                    setDragOverDate(dateIso)
                   }}
-                  onDragLeave={() => setDragOverDay((prev) => (prev === dayOfWeek ? null : prev))}
-                  onDrop={(event) => handleDrop(event, dayOfWeek)}
+                  onDragLeave={() => setDragOverDate((prev) => (prev === dateIso ? null : prev))}
+                  onDrop={(event) => handleDrop(event, dateIso)}
                   className={`relative flex-1 overflow-hidden rounded border transition-colors ${
-                    dragOverDay === dayOfWeek ? 'border-neutral-500 bg-neutral-900' : 'border-neutral-800'
-                  }`}
+                    dragOverDate === dateIso ? 'border-neutral-500 bg-neutral-900' : 'border-neutral-800'
+                  } ${isToday ? 'ring-1 ring-sky-500/30' : ''}`}
                   style={{ height: rowHeight, ...gridlineBackground }}
                 >
                   {localData.map((employee, employeeIndex) => {
                     const laneIndex = employeesThisDay.findIndex((e) => e.employee_id === employee.employee_id)
                     if (laneIndex === -1) return null
                     return employee.schedule
-                      .filter((block) => block.day_of_week === dayOfWeek)
+                      .filter((block) => block.date === dateIso)
                       .map((block) => {
                         const startMinutes = timeToMinutes(block.start_time) - START_HOUR * 60
                         const endMinutes = timeToMinutes(block.end_time) - START_HOUR * 60
-                        // Recortamos a la ventana visible (6:00-23:00): un
-                        // horario que empiece o acabe fuera de esa franja
-                        // se ve cortado en el borde en vez de escaparse
-                        // del todo con un porcentaje negativo o gigante.
                         const leftPct = Math.max(0, Math.min(100, (startMinutes / TOTAL_MINUTES) * 100))
                         const rightPct = Math.max(0, Math.min(100, (endMinutes / TOTAL_MINUTES) * 100))
                         const widthPct = Math.max(2, rightPct - leftPct)
@@ -384,8 +442,8 @@ export function ScheduleGantt({ data, idToken }: ScheduleGanttProps) {
       </div>
 
       <p className="mt-3 text-xs text-neutral-600">
-        Arrastra el bloque de un empleado hacia el día y hora donde quieres que trabaje. Si necesita turno partido,
-        arrástralo otra vez a otro hueco. La ✕ quita un turno ya colocado.
+        Arrastra el bloque de un empleado hacia el día y hora donde quieres que trabaje esta semana. Si necesita
+        turno partido, arrástralo otra vez a otro hueco. La ✕ quita un turno ya colocado.
       </p>
 
       {hoursPopup && (
