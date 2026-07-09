@@ -82,21 +82,6 @@ async def update_appointment_status(
         return {"status": "ok", "appointment_id": appointment_id, "new_status": body.status.value}
 
 
-@router.get("/api/admin/employees")
-async def list_employees(current_user: User = Depends(get_current_user)):
-    # Lista simple para poblar el desplegable "empleado" al crear una cita
-    # a mano. Solo role=employee — el dueño no se agenda a sí mismo.
-    business_id = str(current_user.business_id)
-    async with get_db_session() as db:
-        stmt = (
-            select(User)
-            .where(User.business_id == business_id, User.role == RoleEnum.employee)
-            .order_by(User.name)
-        )
-        employees = (await db.execute(stmt)).scalars().all()
-        return [{"id": str(e.id), "name": e.name} for e in employees]
-
-
 @router.get("/api/admin/services")
 async def list_services(current_user: User = Depends(get_current_user)):
     # Lista simple para poblar el desplegable "servicio" al crear una cita

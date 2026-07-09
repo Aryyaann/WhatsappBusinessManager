@@ -7,6 +7,7 @@ import {
   type Appointment,
   type AppointmentStatus,
 } from './api/appointments'
+import { fetchEmployees, type Employee } from './api/employees'
 import { fetchCurrentUser, ApiError, type CurrentUser } from './api/me'
 import { createBusiness } from './api/onboarding'
 import { ProductsTable } from './components/ProductsTable'
@@ -14,8 +15,9 @@ import { AppointmentsTable } from './components/AppointmentsTable'
 import { Modal } from './components/Modal'
 import { ProductForm } from './components/ProductForm'
 import { AppointmentForm } from './components/AppointmentForm'
+import { EmployeeForm } from './components/EmployeeForm'
 
-type Tab = 'inventario' | 'citas'
+type Tab = 'inventario' | 'citas' | 'empleados'
 
 function signOutRedirect() {
   const clientId = import.meta.env.VITE_COGNITO_CLIENT_ID
@@ -60,6 +62,12 @@ function App() {
   const [appointmentsError, setAppointmentsError] = useState('')
   const [statusFilter, setStatusFilter] = useState<AppointmentStatus | 'all'>('all')
 
+  // --- Empleados ---
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employeesStatus, setEmployeesStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle')
+  const [employeesError, setEmployeesError] = useState('')
+  const [showEmployeeModal, setShowEmployeeModal] = useState(false)
+
   function loadProducts() {
     setProductsStatus('loading')
     setProductsError('')
@@ -85,6 +93,20 @@ function App() {
       .catch((error: Error) => {
         setAppointmentsError(error.message)
         setAppointmentsStatus('error')
+      })
+  }
+
+  function loadEmployees() {
+    setEmployeesStatus('loading')
+    setEmployeesError('')
+    fetchEmployees(idToken)
+      .then((data) => {
+        setEmployees(data)
+        setEmployeesStatus('ready')
+      })
+      .catch((error: Error) => {
+        setEmployeesError(error.message)
+        setEmployeesStatus('error')
       })
   }
 
@@ -139,6 +161,7 @@ function App() {
     if (meStatus !== 'ready') return
     loadProducts()
     loadAppointments()
+    loadEmployees()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meStatus])
 
@@ -308,7 +331,7 @@ function App() {
         <header className="mb-8 flex items-start justify-between">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">
-              {activeTab === 'inventario' ? 'Inventario' : 'Citas'}
+              {activeTab === 'inventario' ? 'Inventario' : activeTab === 'citas' ? 'Citas' : 'Empleados'}
             </h1>
             <p className="mt-1 text-sm text-neutral-500">
               Panel de administración — WhatsApp Business Manager
@@ -351,6 +374,17 @@ function App() {
             }`}
           >
             Citas
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('empleados')}
+            className={`px-3 py-2 text-sm font-medium ${
+              activeTab === 'empleados'
+                ? 'border-b-2 border-neutral-100 text-neutral-100'
+                : 'text-neutral-500 hover:text-neutral-300'
+            }`}
+          >
+            Empleados
           </button>
         </div>
 
@@ -456,6 +490,40 @@ function App() {
             )}
           </>
         )}
+
+        {activeTab === 'empleados' && (
+          <>
+            <div className="mb-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowEmployeeModal(true)}
+                className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-950 hover:bg-neutral-300"
+              >
+                + Nuevo empleado
+              </button>
+            </div>
+            {employeesStatus === 'loading' && employees.length === 0 && (
+              <p className="text-sm text-neutral-500">Cargando empleados…</p>
+            )}
+            {employeesStatus === 'error' && (
+              <p className="text-sm text-red-400">No se pudieron cargar los empleados: {employeesError}</p>
+            )}
+            {employees.length > 0 && (
+              <div className="overflow-hidden rounded-lg border border-neutral-800">
+                <ul className="divide-y divide-neutral-800">
+                  {employees.map((employee) => (
+                    <li key={employee.id} className="bg-neutral-950 px-4 py-3 text-sm text-neutral-100">
+                      {employee.name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {employeesStatus === 'ready' && employees.length === 0 && (
+              <p className="text-sm text-neutral-500">Este negocio no tiene empleados todavía.</p>
+            )}
+          </>
+        )}
       </div>
 
       {showProductModal && (
@@ -473,6 +541,19 @@ function App() {
               loadAppointments()
             }}
             onCancel={() => setShowAppointmentModal(false)}
+          />
+        </Modal>
+      )}
+
+      {showEmployeeModal && (
+        <Modal title="Nuevo empleado" onClose={() => setShowEmployeeModal(false)}>
+          <EmployeeForm
+            idToken={idToken}
+            onCreated={() => {
+              setShowEmployeeModal(false)
+              loadEmployees()
+            }}
+            onCancel={() => setShowEmployeeModal(false)}
           />
         </Modal>
       )}

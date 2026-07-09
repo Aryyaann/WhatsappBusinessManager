@@ -1,12 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import {
-  createAppointment,
-  fetchEmployees,
-  fetchServices,
-  type AppointmentInput,
-  type Employee,
-  type ServiceOption,
-} from '../api/appointments'
+import { createAppointment, fetchServices, type AppointmentInput, type ServiceOption } from '../api/appointments'
+import { fetchEmployees, type Employee } from '../api/employees'
 
 interface AppointmentFormProps {
   idToken: string

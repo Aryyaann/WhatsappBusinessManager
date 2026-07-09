@@ -12,11 +12,6 @@ export interface Appointment {
   notes: string | null
 }
 
-export interface Employee {
-  id: string
-  name: string
-}
-
 export interface ServiceOption {
   id: string
   name: string
@@ -51,14 +46,6 @@ export async function fetchAppointments(idToken: string): Promise<Appointment[]>
   const response = await fetch('/api/admin/appointments', { headers: authHeaders(idToken) })
   if (!response.ok) {
     throw new Error(`Error ${response.status} al cargar las citas`)
-  }
-  return response.json()
-}
-
-export async function fetchEmployees(idToken: string): Promise<Employee[]> {
-  const response = await fetch('/api/admin/employees', { headers: authHeaders(idToken) })
-  if (!response.ok) {
-    throw new Error(`Error ${response.status} al cargar empleados`)
   }
   return response.json()
 }

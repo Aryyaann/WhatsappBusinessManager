@@ -149,22 +149,6 @@ def test_update_status_rejects_invalid_status_value():
 
 
 @patch("app.api.admin.appointments.get_db_session")
-def test_list_employees_returns_only_employees(mock_get_db):
-    mock_db = AsyncMock()
-    employee = MagicMock(id="emp-1")
-    employee.name = "Ana"
-    mock_db.execute.return_value = MagicMock(
-        scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[employee])))
-    )
-    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
-
-    response = client.get("/api/admin/employees")
-
-    assert response.status_code == 200
-    assert response.json() == [{"id": "emp-1", "name": "Ana"}]
-
-
-@patch("app.api.admin.appointments.get_db_session")
 def test_list_services_returns_active_services(mock_get_db):
     mock_db = AsyncMock()
     service = MagicMock(id="service-1", duration_minutes=30, price=None)
