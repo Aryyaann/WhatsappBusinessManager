@@ -8,6 +8,7 @@ import {
   type AppointmentStatus,
 } from './api/appointments'
 import { fetchEmployees, type Employee } from './api/employees'
+import { fetchWeeklySchedule, type EmployeeWeeklySchedule } from './api/schedule'
 import { fetchCurrentUser, ApiError, type CurrentUser } from './api/me'
 import { createBusiness } from './api/onboarding'
 import { ProductsTable } from './components/ProductsTable'
@@ -16,6 +17,8 @@ import { Modal } from './components/Modal'
 import { ProductForm } from './components/ProductForm'
 import { AppointmentForm } from './components/AppointmentForm'
 import { EmployeeForm } from './components/EmployeeForm'
+import { ScheduleGantt } from './components/ScheduleGantt'
+import { EmployeeDetailModal } from './components/EmployeeDetailModal'
 
 type Tab = 'inventario' | 'citas' | 'empleados'
 
@@ -67,6 +70,10 @@ function App() {
   const [employeesStatus, setEmployeesStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle')
   const [employeesError, setEmployeesError] = useState('')
   const [showEmployeeModal, setShowEmployeeModal] = useState(false)
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null)
+  const [weeklySchedule, setWeeklySchedule] = useState<EmployeeWeeklySchedule[]>([])
+  const [scheduleStatus, setScheduleStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle')
+  const [scheduleError, setScheduleError] = useState('')
 
   function loadProducts() {
     setProductsStatus('loading')
@@ -107,6 +114,20 @@ function App() {
       .catch((error: Error) => {
         setEmployeesError(error.message)
         setEmployeesStatus('error')
+      })
+  }
+
+  function loadWeeklySchedule() {
+    setScheduleStatus('loading')
+    setScheduleError('')
+    fetchWeeklySchedule(idToken)
+      .then((data) => {
+        setWeeklySchedule(data)
+        setScheduleStatus('ready')
+      })
+      .catch((error: Error) => {
+        setScheduleError(error.message)
+        setScheduleStatus('error')
       })
   }
 
@@ -162,6 +183,7 @@ function App() {
     loadProducts()
     loadAppointments()
     loadEmployees()
+    loadWeeklySchedule()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meStatus])
 
@@ -512,8 +534,14 @@ function App() {
               <div className="overflow-hidden rounded-lg border border-neutral-800">
                 <ul className="divide-y divide-neutral-800">
                   {employees.map((employee) => (
-                    <li key={employee.id} className="bg-neutral-950 px-4 py-3 text-sm text-neutral-100">
-                      {employee.name}
+                    <li key={employee.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedEmployee(employee)}
+                        className="w-full bg-neutral-950 px-4 py-3 text-left text-sm text-neutral-100 hover:bg-neutral-900"
+                      >
+                        {employee.name}
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -521,6 +549,21 @@ function App() {
             )}
             {employeesStatus === 'ready' && employees.length === 0 && (
               <p className="text-sm text-neutral-500">Este negocio no tiene empleados todavía.</p>
+            )}
+
+            {employees.length > 0 && (
+              <div className="mt-8">
+                <h2 className="mb-3 text-sm font-medium text-neutral-300">Horario semanal</h2>
+                {scheduleStatus === 'loading' && weeklySchedule.length === 0 && (
+                  <p className="text-sm text-neutral-500">Cargando horario…</p>
+                )}
+                {scheduleStatus === 'error' && (
+                  <p className="text-sm text-red-400">No se pudo cargar el horario: {scheduleError}</p>
+                )}
+                {scheduleStatus === 'ready' && weeklySchedule.length > 0 && (
+                  <ScheduleGantt data={weeklySchedule} idToken={idToken} />
+                )}
+              </div>
             )}
           </>
         )}
@@ -545,6 +588,14 @@ function App() {
         </Modal>
       )}
 
+      {selectedEmployee && (
+        <EmployeeDetailModal
+          employee={selectedEmployee}
+          schedule={weeklySchedule.find((s) => s.employee_id === selectedEmployee.id)}
+          onClose={() => setSelectedEmployee(null)}
+        />
+      )}
+
       {showEmployeeModal && (
         <Modal title="Nuevo empleado" onClose={() => setShowEmployeeModal(false)}>
           <EmployeeForm
@@ -552,6 +603,7 @@ function App() {
             onCreated={() => {
               setShowEmployeeModal(false)
               loadEmployees()
+              loadWeeklySchedule()
             }}
             onCancel={() => setShowEmployeeModal(false)}
           />

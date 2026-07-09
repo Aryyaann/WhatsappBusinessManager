@@ -1,6 +1,7 @@
 export interface Employee {
   id: string
   name: string
+  whatsapp_number: string
 }
 
 export interface ScheduleSlotInput {
