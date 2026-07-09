@@ -13,6 +13,7 @@ import { ProductsTable } from './components/ProductsTable'
 import { AppointmentsTable } from './components/AppointmentsTable'
 import { Modal } from './components/Modal'
 import { ProductForm } from './components/ProductForm'
+import { AppointmentForm } from './components/AppointmentForm'
 
 type Tab = 'inventario' | 'citas'
 
@@ -51,6 +52,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('')
   const [showLowStockOnly, setShowLowStockOnly] = useState(false)
   const [showProductModal, setShowProductModal] = useState(false)
+  const [showAppointmentModal, setShowAppointmentModal] = useState(false)
 
   // --- Citas ---
   const [appointments, setAppointments] = useState<Appointment[]>([])
@@ -408,6 +410,15 @@ function App() {
 
         {activeTab === 'citas' && (
           <>
+            <div className="mb-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowAppointmentModal(true)}
+                className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-950 hover:bg-neutral-300"
+              >
+                + Nueva cita
+              </button>
+            </div>
             {appointmentsStatus === 'loading' && appointments.length === 0 && (
               <p className="text-sm text-neutral-500">Cargando citas…</p>
             )}
@@ -450,6 +461,19 @@ function App() {
       {showProductModal && (
         <Modal title="Nuevo producto" onClose={() => setShowProductModal(false)}>
           <ProductForm onSubmit={handleCreateProduct} onCancel={() => setShowProductModal(false)} />
+        </Modal>
+      )}
+
+      {showAppointmentModal && (
+        <Modal title="Nueva cita" onClose={() => setShowAppointmentModal(false)}>
+          <AppointmentForm
+            idToken={idToken}
+            onCreated={() => {
+              setShowAppointmentModal(false)
+              loadAppointments()
+            }}
+            onCancel={() => setShowAppointmentModal(false)}
+          />
         </Modal>
       )}
     </div>
