@@ -108,3 +108,47 @@ async def test_cancel_appointment_returns_none_when_not_found(mock_availability_
 
     assert result is None
     db.commit.assert_not_awaited()
+
+@pytest.mark.asyncio
+@patch("app.domain.appointments.booking_service.AvailabilityService")
+async def test_create_pending_appointment_does_not_check_availability(mock_availability_cls):
+    # A diferencia de book_appointment, no debe consultar disponibilidad en
+    # absoluto — se usa precisamente cuando ya sabemos que no hay horario.
+    db = AsyncMock(spec=AsyncSession)
+
+    service = BookingService(db)
+    appointment = await service.create_pending_appointment(
+        business_id="business-1",
+        customer_phone="+34600000099",
+        start_at=datetime(2026, 7, 6, 9, 0),
+        duration_minutes=30,
+        user_id="user-1",
+        customer_name="Lucía",
+        service_id="service-1",
+        reason_note="Pendiente: sin horario planificado.",
+    )
+
+    mock_availability_cls.return_value.get_available_slots.assert_not_called()
+    assert appointment.status == AppointmentStatusEnum.pending
+    assert appointment.assigned_to == "user-1"
+    assert appointment.notes == "Pendiente: sin horario planificado."
+    db.add.assert_called_once()
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("app.domain.appointments.booking_service.AvailabilityService")
+async def test_create_pending_appointment_allows_unassigned_employee(mock_availability_cls):
+    db = AsyncMock(spec=AsyncSession)
+
+    service = BookingService(db)
+    appointment = await service.create_pending_appointment(
+        business_id="business-1",
+        customer_phone="+34600000099",
+        start_at=datetime(2026, 7, 6, 9, 0),
+        duration_minutes=30,
+        service_id="service-1",
+    )
+
+    assert appointment.assigned_to is None
+    assert appointment.status == AppointmentStatusEnum.pending

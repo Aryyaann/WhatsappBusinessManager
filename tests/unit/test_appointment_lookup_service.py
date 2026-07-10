@@ -52,3 +52,28 @@ async def test_find_service_by_name_returns_none_when_no_match():
     result = await service.find_service_by_name("business-1", "manicura egipcia")
 
     assert result is None
+
+@pytest.mark.asyncio
+async def test_list_employees_returns_all_employees_of_business():
+    ana = MagicMock()
+    ana.name = "Ana"
+    pedro = MagicMock()
+    pedro.name = "Pedro"
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[ana, pedro]))))
+
+    service = AppointmentLookupService(db)
+    result = await service.list_employees("business-1")
+
+    assert result == [ana, pedro]
+
+
+@pytest.mark.asyncio
+async def test_list_employees_returns_empty_list_when_none():
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
+
+    service = AppointmentLookupService(db)
+    result = await service.list_employees("business-1")
+
+    assert result == []

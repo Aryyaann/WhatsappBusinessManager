@@ -60,6 +60,39 @@ class BookingService:
         await self.db.refresh(appointment)
         return appointment
 
+    async def create_pending_appointment(
+        self,
+        business_id: str,
+        customer_phone: str,
+        start_at: datetime,
+        duration_minutes: int,
+        user_id: Optional[str] = None,
+        customer_name: Optional[str] = None,
+        service_id: Optional[str] = None,
+        reason_note: Optional[str] = None,
+    ) -> Appointment:
+        # A diferencia de book_appointment, NO valida disponibilidad — se
+        # usa específicamente cuando ya sabemos que la semana pedida no
+        # tiene horario planificado (has_schedule_for_date devolvió False).
+        # user_id puede ser None: "sin asignar todavía, que decida el
+        # dueño". El dueño confirma o reasigna desde el panel (Pieza C,
+        # pendiente de construir).
+        appointment = Appointment(
+            business_id=business_id,
+            assigned_to=user_id,
+            service_id=service_id,
+            customer_phone=customer_phone,
+            customer_name=customer_name,
+            start_at=start_at,
+            end_at=start_at + timedelta(minutes=duration_minutes),
+            status=AppointmentStatusEnum.pending,
+            notes=reason_note,
+        )
+        self.db.add(appointment)
+        await self.db.commit()
+        await self.db.refresh(appointment)
+        return appointment
+
     async def cancel_appointment(self, appointment_id: str) -> Optional[Appointment]:
         result = await self.db.execute(
             select(Appointment).where(Appointment.id == appointment_id)

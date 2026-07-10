@@ -6,6 +6,8 @@ from app.domain.conversations.query_handler import CONSULTAR_STOCK_TOOL, _serial
 from app.domain.appointments.booking_handler import (
     CONSULTAR_DISPONIBILIDAD_TOOL,
     RESERVAR_CITA_TOOL,
+    BUSCAR_EMPLEADOS_ALTERNATIVOS_TOOL,
+    CREAR_CITA_PENDIENTE_TOOL,
     _execute_tool as _execute_appointment_tool,
 )
 
@@ -30,11 +32,25 @@ Ayudas al dueño con dos cosas:
    una fecha relativa ("mañana", "el lunes"), calcúlala tú mismo a partir
    de la fecha de hoy — no se lo preguntes salvo que sea genuinamente ambiguo.
 
+   Si consultar_disponibilidad_citas te dice que el empleado pedido NO
+   tiene horario planificado esa semana (distinto de "está completo"), usa
+   buscar_empleados_alternativos para ver si otro empleado sí tiene hueco
+   ese mismo día, y ofrécelo al cliente. Si el cliente prefiere esperar
+   igualmente al empleado original, o tampoco hay alternativa, usa
+   crear_cita_pendiente — deja claro que no es una reserva confirmada
+   todavía, que el negocio la confirmará en cuanto planifique esa semana.
+
 Responde siempre en español, de forma breve y natural.
 """
 
 
-ALL_TOOLS = [CONSULTAR_STOCK_TOOL, CONSULTAR_DISPONIBILIDAD_TOOL, RESERVAR_CITA_TOOL]
+ALL_TOOLS = [
+    CONSULTAR_STOCK_TOOL,
+    CONSULTAR_DISPONIBILIDAD_TOOL,
+    RESERVAR_CITA_TOOL,
+    BUSCAR_EMPLEADOS_ALTERNATIVOS_TOOL,
+    CREAR_CITA_PENDIENTE_TOOL,
+]
 
 # Límite de idas y vueltas con Claude en una sola solicitud (ej. consultar
 # disponibilidad + reservar puede necesitar 2). Evita bucles infinitos.
@@ -52,7 +68,12 @@ async def _execute_tool(db, business_id: str, customer_phone: str, tool_name: st
         results = await stock_service.query_stock(business_id, tool_input["query"])
         return _serialize_stock_results(results)
 
-    if tool_name in ("consultar_disponibilidad_citas", "reservar_cita"):
+    if tool_name in (
+        "consultar_disponibilidad_citas",
+        "reservar_cita",
+        "buscar_empleados_alternativos",
+        "crear_cita_pendiente",
+    ):
         return await _execute_appointment_tool(db, business_id, customer_phone, tool_name, tool_input)
 
     return f"Herramienta desconocida: {tool_name}"

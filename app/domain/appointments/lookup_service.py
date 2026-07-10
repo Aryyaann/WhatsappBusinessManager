@@ -36,3 +36,15 @@ class AppointmentLookupService:
             )
         )
         return result.scalars().first()
+
+    async def list_employees(self, business_id: str) -> list[User]:
+        # Todos los empleados del negocio — se usa para buscar alternativas
+        # cuando el empleado pedido no tiene horario planificado esa
+        # semana. NOTA: no filtra por "quién hace este servicio" porque
+        # employee_services (la tabla pensada para eso) no se usa todavía
+        # en ningún sitio del código — de momento se comprueba disponibilidad
+        # de todos los empleados sin distinción.
+        result = await self.db.execute(
+            select(User).where(User.business_id == business_id, User.role == RoleEnum.employee).order_by(User.name)
+        )
+        return list(result.scalars().all())

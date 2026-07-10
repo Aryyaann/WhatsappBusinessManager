@@ -146,3 +146,39 @@ async def test_unknown_tool_name_returns_placeholder_without_crashing(mock_anthr
     second_call_messages = mock_anthropic.chat_with_tools.call_args_list[1].kwargs["messages"]
     tool_result_text = second_call_messages[-1]["content"][0]["content"]
     assert "Herramienta desconocida" in tool_result_text
+
+@pytest.mark.asyncio
+@patch("app.domain.conversations.assistant_handler._execute_appointment_tool")
+@patch("app.domain.conversations.assistant_handler.anthropic_client")
+async def test_routes_new_pending_tools_to_appointment_handler(mock_anthropic, mock_execute_appointment):
+    # Pieza B: buscar_empleados_alternativos y crear_cita_pendiente también
+    # deben enrutarse al handler de citas, igual que las dos herramientas
+    # originales.
+    tool_block = make_tool_use_block(
+        "buscar_empleados_alternativos",
+        {"service_name": "Corte", "date": "2026-07-20"},
+    )
+    first_response = make_response([tool_block])
+    second_response = make_response([make_text_block("Juan tiene hueco a las 10:00.")])
+    mock_anthropic.chat_with_tools.side_effect = [first_response, second_response]
+    mock_execute_appointment.return_value = "Empleados con hueco ese día: Juan (10:00)"
+
+    db = MagicMock()
+    result = await handle_assistant_request(
+        db=db, business_id="business-1", customer_phone="+34600000099",
+        message_text="¿algún otro empleado libre?",
+    )
+
+    assert result["tools_called"] == ["buscar_empleados_alternativos"]
+    mock_execute_appointment.assert_called_once_with(
+        db, "business-1", "+34600000099", "buscar_empleados_alternativos",
+        {"service_name": "Corte", "date": "2026-07-20"},
+    )
+
+
+def test_all_tools_includes_pending_appointment_tools():
+    from app.domain.conversations.assistant_handler import ALL_TOOLS
+
+    tool_names = {tool["name"] for tool in ALL_TOOLS}
+    assert "buscar_empleados_alternativos" in tool_names
+    assert "crear_cita_pendiente" in tool_names

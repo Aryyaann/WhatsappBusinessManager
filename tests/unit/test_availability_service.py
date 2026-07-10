@@ -157,3 +157,24 @@ async def test_cancelled_appointment_does_not_block_slot():
     slots = await service.get_available_slots("user-1", MONDAY, duration_minutes=30)
 
     assert slots == [datetime(2026, 7, 6, 9, 0)]
+
+@pytest.mark.asyncio
+async def test_has_schedule_for_date_returns_true_when_schedule_exists():
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value="block-1"))
+
+    service = AvailabilityService(db)
+    result = await service.has_schedule_for_date("user-1", MONDAY)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_has_schedule_for_date_returns_false_when_no_schedule():
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+
+    service = AvailabilityService(db)
+    result = await service.has_schedule_for_date("user-1", MONDAY)
+
+    assert result is False

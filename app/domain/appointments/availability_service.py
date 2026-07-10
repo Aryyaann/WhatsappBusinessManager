@@ -76,6 +76,17 @@ class AvailabilityService:
 
         return sorted(slots)
 
+    async def has_schedule_for_date(self, user_id: str, target_date: date_type) -> bool:
+        # Distingue "no hay huecos porque esta semana no se ha planificado
+        # todavía" de "no hay huecos porque está completo" — el mensaje al
+        # cliente (y lo que hace el bot después) es distinto en cada caso.
+        result = await self.db.execute(
+            select(EmployeeSchedule.id)
+            .where(EmployeeSchedule.user_id == user_id, EmployeeSchedule.date == target_date)
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
     @staticmethod
     def _subtract_busy(
         interval_start: datetime,
