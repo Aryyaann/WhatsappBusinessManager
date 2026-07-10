@@ -13,6 +13,7 @@ import { fetchCurrentUser, ApiError, type CurrentUser } from './api/me'
 import { createBusiness } from './api/onboarding'
 import { ProductsTable } from './components/ProductsTable'
 import { AppointmentsTable } from './components/AppointmentsTable'
+import { PendingAppointmentsPanel } from './components/PendingAppointmentsPanel'
 import { Modal } from './components/Modal'
 import { ProductForm } from './components/ProductForm'
 import { AppointmentForm } from './components/AppointmentForm'
@@ -508,6 +509,12 @@ function App() {
 
         {activeTab === 'citas' && (
           <>
+            <PendingAppointmentsPanel
+              appointments={appointments}
+              employees={employees}
+              idToken={idToken}
+              onConfirmed={loadAppointments}
+            />
             <div className="mb-4 flex justify-end">
               <button
                 type="button"

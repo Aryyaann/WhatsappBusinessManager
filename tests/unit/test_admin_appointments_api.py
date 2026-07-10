@@ -269,3 +269,174 @@ def test_create_appointment_requires_authentication():
     )
 
     assert response.status_code == 401
+
+
+@patch("app.api.admin.appointments.twilio_client")
+@patch("app.api.admin.appointments.get_db_session")
+def test_confirm_appointment_keeps_same_employee_without_revalidating(mock_get_db, mock_twilio):
+    # Confirmar SIN cambiar de empleado no debe volver a comprobar
+    # disponibilidad (la propia cita pendiente se contaría a sí misma como
+    # conflicto).
+    mock_db = AsyncMock()
+    appointment = MagicMock(
+        id="appt-1",
+        assigned_to="emp-1",
+        service_id="service-1",
+        customer_phone="+34600000001",
+        start_at=datetime(2026, 7, 20, 9, 0),
+        end_at=datetime(2026, 7, 20, 9, 30),
+        status=AppointmentStatusEnum.pending,
+    )
+    employee = MagicMock(id="emp-1")
+    employee.name = "Ana"
+    service = MagicMock(id="service-1")
+    service.name = "Corte de pelo"
+    mock_db.execute.side_effect = [
+        MagicMock(scalar_one_or_none=MagicMock(return_value=appointment)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value=employee)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value=service)),
+    ]
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    response = client.patch("/api/admin/appointments/appt-1/confirm", json={})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "confirmed"
+    assert data["employee_name"] == "Ana"
+    assert data["whatsapp_sent"] is True
+    assert appointment.status == AppointmentStatusEnum.confirmed
+    mock_twilio.send_text.assert_called_once()
+    sent_message = mock_twilio.send_text.call_args.args[1]
+    assert "Corte de pelo" in sent_message
+    assert "Ana" in sent_message
+
+
+@patch("app.api.admin.appointments.twilio_client")
+@patch("app.api.admin.appointments.AvailabilityService")
+@patch("app.api.admin.appointments.get_db_session")
+def test_confirm_appointment_reassigns_and_validates_availability(mock_get_db, mock_availability_cls, mock_twilio):
+    mock_db = AsyncMock()
+    appointment = MagicMock(
+        id="appt-1",
+        assigned_to=None,
+        service_id="service-1",
+        customer_phone="+34600000001",
+        start_at=datetime(2026, 7, 20, 9, 0),
+        end_at=datetime(2026, 7, 20, 9, 30),
+        status=AppointmentStatusEnum.pending,
+    )
+    employee = MagicMock(id="emp-2")
+    employee.name = "Juan"
+    service = MagicMock(id="service-1")
+    service.name = "Corte de pelo"
+    mock_db.execute.side_effect = [
+        MagicMock(scalar_one_or_none=MagicMock(return_value=appointment)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value=employee)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value=service)),
+    ]
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+    mock_availability_cls.return_value.get_available_slots = AsyncMock(
+        return_value=[datetime(2026, 7, 20, 9, 0)]
+    )
+
+    response = client.patch("/api/admin/appointments/appt-1/confirm", json={"employee_id": "emp-2"})
+
+    assert response.status_code == 200
+    assert appointment.assigned_to == "emp-2"
+    mock_availability_cls.return_value.get_available_slots.assert_called_once()
+
+
+@patch("app.api.admin.appointments.AvailabilityService")
+@patch("app.api.admin.appointments.get_db_session")
+def test_confirm_appointment_rejects_reassignment_without_free_slot(mock_get_db, mock_availability_cls):
+    mock_db = AsyncMock()
+    appointment = MagicMock(
+        id="appt-1",
+        assigned_to=None,
+        service_id="service-1",
+        customer_phone="+34600000001",
+        start_at=datetime(2026, 7, 20, 9, 0),
+        end_at=datetime(2026, 7, 20, 9, 30),
+        status=AppointmentStatusEnum.pending,
+    )
+    employee = MagicMock(id="emp-2")
+    employee.name = "Juan"
+    mock_db.execute.side_effect = [
+        MagicMock(scalar_one_or_none=MagicMock(return_value=appointment)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value=employee)),
+    ]
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+    mock_availability_cls.return_value.get_available_slots = AsyncMock(return_value=[])
+
+    response = client.patch("/api/admin/appointments/appt-1/confirm", json={"employee_id": "emp-2"})
+
+    assert response.status_code == 409
+    assert appointment.status == AppointmentStatusEnum.pending
+
+
+@patch("app.api.admin.appointments.get_db_session")
+def test_confirm_appointment_requires_employee_when_none_assigned(mock_get_db):
+    mock_db = AsyncMock()
+    appointment = MagicMock(id="appt-1", assigned_to=None)
+    mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=appointment))
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    response = client.patch("/api/admin/appointments/appt-1/confirm", json={})
+
+    assert response.status_code == 400
+
+
+@patch("app.api.admin.appointments.get_db_session")
+def test_confirm_appointment_returns_404_when_not_found(mock_get_db):
+    mock_db = AsyncMock()
+    mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+
+    response = client.patch("/api/admin/appointments/missing-id/confirm", json={})
+
+    assert response.status_code == 404
+
+
+@patch("app.api.admin.appointments.twilio_client")
+@patch("app.api.admin.appointments.get_db_session")
+def test_confirm_appointment_succeeds_even_if_whatsapp_send_fails(mock_get_db, mock_twilio):
+    # El aviso es "best effort" — si Twilio falla, la cita queda confirmada
+    # igualmente, no se pierde la confirmación por un problema de mensajería.
+    mock_db = AsyncMock()
+    appointment = MagicMock(
+        id="appt-1",
+        assigned_to="emp-1",
+        service_id="service-1",
+        customer_phone="+34600000001",
+        start_at=datetime(2026, 7, 20, 9, 0),
+        end_at=datetime(2026, 7, 20, 9, 30),
+        status=AppointmentStatusEnum.pending,
+    )
+    employee = MagicMock(id="emp-1")
+    employee.name = "Ana"
+    service = MagicMock(id="service-1")
+    service.name = "Corte de pelo"
+    mock_db.execute.side_effect = [
+        MagicMock(scalar_one_or_none=MagicMock(return_value=appointment)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value=employee)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value=service)),
+    ]
+    mock_get_db.return_value = FakeDBSessionCtx(mock_db)
+    mock_twilio.send_text.side_effect = Exception("Twilio caído")
+
+    response = client.patch("/api/admin/appointments/appt-1/confirm", json={})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "confirmed"
+    assert data["whatsapp_sent"] is False
+    assert "Twilio caído" in data["whatsapp_error"]
+    assert appointment.status == AppointmentStatusEnum.confirmed
+
+
+def test_confirm_appointment_requires_authentication():
+    app.dependency_overrides.clear()
+    response = client.patch("/api/admin/appointments/appt-1/confirm", json={})
+
+    assert response.status_code == 401

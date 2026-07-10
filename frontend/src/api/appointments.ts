@@ -28,6 +28,14 @@ export interface AppointmentInput {
   notes?: string
 }
 
+export interface ConfirmAppointmentResult {
+  id: string
+  status: AppointmentStatus
+  employee_name: string
+  whatsapp_sent: boolean
+  whatsapp_error: string | null
+}
+
 function authHeaders(idToken: string): HeadersInit {
   return { Authorization: `Bearer ${idToken}` }
 }
@@ -83,4 +91,20 @@ export async function updateAppointmentStatus(
   if (!response.ok) {
     throw new Error(`Error ${response.status} al actualizar el estado`)
   }
+}
+
+export async function confirmAppointment(
+  appointmentId: string,
+  employeeId: string | null,
+  idToken: string,
+): Promise<ConfirmAppointmentResult> {
+  const response = await fetch(`/api/admin/appointments/${appointmentId}/confirm`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(idToken) },
+    body: JSON.stringify({ employee_id: employeeId }),
+  })
+  if (!response.ok) {
+    throw new Error(await readErrorDetail(response, `Error ${response.status} al confirmar la cita`))
+  }
+  return response.json()
 }
